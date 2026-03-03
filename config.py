@@ -49,7 +49,7 @@ NSE_CM_BHAVCOPY_URL = (
 )
 
 NSE_PARTICIPANT_OI_URL = (
-    f"{NSE_BASE}/content/nsccl/fao_participant_oi_{{yyyy}}{{mm}}{{dd}}.csv"
+    f"{NSE_BASE}/content/nsccl/fao_participant_oi_{{dd}}{{mm}}{{yyyy}}.csv"
 )
 
 # Fallback / alternate NSE bhavcopy CDN (old format — kept for reference only)
