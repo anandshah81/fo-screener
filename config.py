@@ -39,19 +39,20 @@ SHEET_TABS = {
 # ─────────────────────────────────────────────
 NSE_BASE = "https://nsearchives.nseindia.com"
 
+# New UDiFF format URLs (effective July 8, 2024 — old format discontinued)
 NSE_FO_BHAVCOPY_URL = (
-    f"{NSE_BASE}/content/historical/DERIVATIVES/{{yyyy}}/{{MON}}/fo{{dd}}{{MON}}{{yyyy}}bhav.csv.zip"
+    f"{NSE_BASE}/content/fo/BhavCopy_NSE_FO_0_0_0_{{yyyy}}{{mm}}{{dd}}_F_0000.csv.zip"
 )
 
 NSE_CM_BHAVCOPY_URL = (
-    f"{NSE_BASE}/content/historical/EQUITIES/{{yyyy}}/{{MON}}/cm{{dd}}{{MON}}{{yyyy}}bhav.csv.zip"
+    f"{NSE_BASE}/content/cm/BhavCopy_NSE_CM_0_0_0_{{yyyy}}{{mm}}{{dd}}_F_0000.csv.zip"
 )
 
 NSE_PARTICIPANT_OI_URL = (
     f"{NSE_BASE}/content/nsccl/fao_participant_oi_{{yyyy}}{{mm}}{{dd}}.csv"
 )
 
-# Fallback / alternate NSE bhavcopy CDN
+# Fallback / alternate NSE bhavcopy CDN (old format — kept for reference only)
 NSE_FO_BHAVCOPY_ALT = (
     "https://www.nseindia.com/api/reports?archives=%5B%7B%22name%22%3A%22F%26O%20-%20Bhavcopy(csv)%22"
     "%2C%22type%22%3A%22archives%22%2C%22category%22%3A%22derivatives%22%2C%22section%22%3A%22equity%22%7D%5D"
