@@ -17,11 +17,11 @@ GOOGLE_CREDENTIALS_PATH = os.environ.get(
 )
 
 # Google Sheet ID (the long alphanumeric string in the sheet URL)
-GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "https://docs.google.com/spreadsheets/d/1P9owULYqmqBcvlzbQnUoCA3qBaJYviIVj25gaHx9Dsg/edit")
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 
 # Telegram Bot Token and Chat ID
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8035306929:AAElgG0S22vrKCyXEW_OyDm6wOPc7U21Ux8")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "1175687717")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # ─────────────────────────────────────────────
 # GOOGLE SHEET TAB NAMES
@@ -194,7 +194,7 @@ NSE_HOLIDAYS_2025 = [
 ]
 
 NSE_HOLIDAYS_2026 = [
-    "2026-01-26", "2026-03-02", "2026-03-19", "2026-03-20",
+    "2026-01-26", "2026-03-19", "2026-03-20",
     "2026-04-02", "2026-04-06", "2026-04-14", "2026-05-01",
     "2026-07-29", "2026-08-15", "2026-09-14", "2026-10-01",
     "2026-10-08", "2026-10-27", "2026-10-28", "2026-11-04",
