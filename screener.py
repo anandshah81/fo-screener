@@ -187,54 +187,55 @@ def download_participant_oi(trade_date: date, session: requests.Session) -> pd.D
 def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     """
     Extract stock futures from F&O bhavcopy.
-    Handles UDiFF format (post July 2024): instrument type STF = Stock Futures.
-    Old format used FUTSTK. Returns per-stock: OI, OI change, close price.
+    UDiFF format (post July 2024): STF=Stock Futures, columns FININSTRMTP, TCKRSYMB, etc.
     """
     logger.info(f"F&O Bhavcopy columns: {list(df.columns)}")
 
-    # ── Map UDiFF and old column names to standard names ────────
+    # ── Rename UDiFF columns to standard names ───────────────────
     col_map = {}
     for c in df.columns:
         cu = c.upper().strip()
-        if cu in ("FININSTRMTP", "INSTRUMENT", "INSTTYPE", "INSTRM"):
+        if cu in ("FININSTRMTP", "INSTRUMENT", "INSTTYPE"):
             col_map[c] = "INSTRUMENT"
-        elif cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME", "SCRIP"):
+        elif cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME"):
             col_map[c] = "SYMBOL"
-        elif cu in ("XPRYDT", "EXPIRY_DT", "EXPDATE", "EXPIRYDATE", "EXP_DT"):
+        elif cu in ("XPRYDT", "EXPIRY_DT", "EXPDATE"):
             col_map[c] = "EXPIRY_DT"
-        elif cu in ("STTLMPRIC", "CLSPRIC", "CLOSE", "SETTLE_PR", "SETTLPR", "CLOSE_PR"):
+        elif cu == "STTLMPRIC":
             col_map[c] = "CLOSE"
-        elif cu in ("PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE", "PREV_CLS"):
+        elif cu in ("CLSPRIC", "LASTPRIC") and "CLOSE" not in col_map.values():
+            col_map[c] = "CLOSE"
+        elif cu in ("PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE"):
             col_map[c] = "PREV_CLOSE"
-        elif cu in ("OPNINTRST", "OPEN_INT", "OPENINT", "OI", "OPENINTEREST"):
+        elif cu in ("OPNINTRST", "OPEN_INT", "OPENINT"):
             col_map[c] = "OI"
-        elif cu in ("CHNGINOPNINTRST", "CHG_IN_OI", "OI_CHANGE", "CHNG_IN_OI"):
+        elif cu in ("CHNGINOPNINTRST", "CHG_IN_OI", "CHNG_IN_OI"):
             col_map[c] = "OI_CHANGE_ABS"
 
     df2 = df.rename(columns=col_map)
 
-    # ── Filter for stock futures ─────────────────────────────────
-    # UDiFF: STF = Stock Futures | Old format: FUTSTK
+    # ── Filter for stock futures: STF (UDiFF) or FUTSTK (old) ───
     STOCK_FUT_TYPES = {"STF", "FUTSTK"}
-    fut = pd.DataFrame()
-    if "INSTRUMENT" in df2.columns:
-        inst_series = df2["INSTRUMENT"].astype(str).str.strip().str.upper()
-        unique_types = inst_series.unique()
-        logger.info(f"Unique instrument types: {unique_types}")
-        fut = df2[inst_series.isin(STOCK_FUT_TYPES)].copy()
+    if "INSTRUMENT" not in df2.columns:
+        logger.warning("No instrument type column found!")
+        return pd.DataFrame()
+
+    inst_series = df2["INSTRUMENT"].astype(str).str.strip().str.upper()
+    logger.info(f"Unique instrument types: {inst_series.unique()}")
+    fut = df2[inst_series.isin(STOCK_FUT_TYPES)].copy().reset_index(drop=True)
 
     if fut.empty:
-        logger.warning("No stock futures rows found in F&O bhavcopy!")
+        logger.warning("No stock futures rows found!")
         return pd.DataFrame()
 
     logger.info(f"Stock futures rows: {len(fut)}")
 
-    # ── Ensure numeric columns ───────────────────────────────────
+    # ── Convert numeric columns ───────────────────────────────────
     for num_col in ("CLOSE", "OI", "OI_CHANGE_ABS", "PREV_CLOSE"):
         if num_col in fut.columns:
-            fut[num_col] = pd.to_numeric(fut[num_col], errors="coerce")
+            fut[num_col] = pd.to_numeric(fut[num_col].astype(str), errors="coerce")
 
-    # ── Parse expiry and pick nearest (current month) contract ───
+    # ── Filter to current month expiry ───────────────────────────
     if "EXPIRY_DT" in fut.columns:
         fut["EXPIRY_DT"] = pd.to_datetime(fut["EXPIRY_DT"], errors="coerce")
         current_month = pd.Timestamp(trade_date).replace(day=1)
@@ -250,7 +251,7 @@ def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         current_contracts = fut.copy()
 
     if current_contracts.empty or "SYMBOL" not in current_contracts.columns:
-        logger.warning("No contracts after expiry filter or missing SYMBOL column!")
+        logger.warning("No contracts after expiry filter!")
         return pd.DataFrame()
 
     # ── Aggregate per symbol ─────────────────────────────────────
@@ -259,6 +260,10 @@ def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         agg_dict["FO_CLOSE"] = ("CLOSE", "last")
     if "OI" in current_contracts.columns:
         agg_dict["OI"] = ("OI", "sum")
+
+    if not agg_dict:
+        logger.warning("No CLOSE or OI columns found!")
+        return pd.DataFrame()
 
     agg = current_contracts.groupby("SYMBOL").agg(**agg_dict).reset_index()
 
@@ -291,26 +296,28 @@ def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
 def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
     """
     Extract equity close, prev close, and delivery % from CM bhavcopy.
-    Handles UDiFF format: TckrSymb, SctySrs, ClsPric, PrvsClsgPric, etc.
+    UDiFF format: TCKRSYMB, SCTYSRS, CLSPRIC, PRVSCLSGPRIC, etc.
     """
     logger.info(f"CM Bhavcopy columns: {list(df.columns)}")
 
     col_map = {}
     for c in df.columns:
         cu = c.upper().strip()
-        if cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME", "SCRIP"):
+        if cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME"):
             col_map[c] = "SYMBOL"
-        elif cu in ("SCTYSRS", "SRIESSRS", "SERIES", "SRSTYPE"):
+        elif cu in ("SCTYSRS", "SRIESSRS", "SERIES"):
             col_map[c] = "SERIES"
-        elif cu in ("CLSPRIC", "STTLMPRIC", "CLOSE", "CLOSE_PRICE", "CLOSEPRICE", "LTP"):
+        elif cu == "STTLMPRIC":
             col_map[c] = "CM_CLOSE"
-        elif cu in ("PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE", "PREV_CLS"):
+        elif cu in ("CLSPRIC", "LASTPRIC") and "CM_CLOSE" not in col_map.values():
+            col_map[c] = "CM_CLOSE"
+        elif cu in ("PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE"):
             col_map[c] = "CM_PREV_CLOSE"
-        elif cu in ("DLVRYQTYPCTGOFTRADGQTY", "DELIV_PER", "DELIVERYPER", "DELIVERY_PCT"):
+        elif cu in ("DLVRYQTYPCTGOFTRADGQTY", "DELIV_PER", "DELIVERY_PCT"):
             col_map[c] = "DELIVERY_PCT"
-        elif cu in ("DLVRYQTY", "DELIVERYQTY", "DELIV_QTY", "DELIVERY_QTY"):
+        elif cu in ("DLVRYQTY", "DELIVERYQTY", "DELIV_QTY"):
             col_map[c] = "DELIVERY_QTY"
-        elif cu in ("TTLTRADGVOL", "TTL_TRD_QNTY", "TOTTRDQTY", "TOT_TRD_QTY"):
+        elif cu in ("TTLTRADGVOL", "TTL_TRD_QNTY", "TOTTRDQTY"):
             col_map[c] = "TOTAL_QTY"
 
     df2 = df.rename(columns=col_map)
@@ -323,20 +330,20 @@ def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
     if "DELIVERY_PCT" not in df2.columns:
         if "DELIVERY_QTY" in df2.columns and "TOTAL_QTY" in df2.columns:
             df2["DELIVERY_PCT"] = (
-                pd.to_numeric(df2["DELIVERY_QTY"], errors="coerce") /
-                pd.to_numeric(df2["TOTAL_QTY"], errors="coerce") * 100
+                pd.to_numeric(df2["DELIVERY_QTY"].astype(str), errors="coerce") /
+                pd.to_numeric(df2["TOTAL_QTY"].astype(str), errors="coerce") * 100
             )
 
     # Convert numeric columns
     for num_col in ("CM_CLOSE", "CM_PREV_CLOSE", "DELIVERY_PCT"):
         if num_col in df2.columns:
-            df2[num_col] = pd.to_numeric(df2[num_col], errors="coerce")
+            df2[num_col] = pd.to_numeric(df2[num_col].astype(str), errors="coerce")
 
     keep = ["SYMBOL", "CM_CLOSE", "CM_PREV_CLOSE", "DELIVERY_PCT"]
     existing = [c for c in keep if c in df2.columns]
     df2 = df2[existing].copy()
 
-    # Deduplicate — keep last entry per symbol (handles multiple sessions in UDiFF)
+    # Deduplicate — UDiFF may have multiple session rows per symbol
     if "SYMBOL" in df2.columns:
         df2 = df2.drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
 
@@ -911,13 +918,13 @@ def run_screener(trade_date: date = None) -> dict:
 
     # Create lookup dicts — deduplicate first to avoid index errors
     if not fo_data.empty and "SYMBOL" in fo_data.columns:
-        fo_data = fo_data.drop_duplicates(subset="SYMBOL", keep="last")
+        fo_data = fo_data.drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
         fo_lookup = fo_data.set_index("SYMBOL").to_dict(orient="index")
     else:
         fo_lookup = {}
 
     if not cm_data.empty and "SYMBOL" in cm_data.columns:
-        cm_data = cm_data.drop_duplicates(subset="SYMBOL", keep="last")
+        cm_data = cm_data.drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
         cm_lookup = cm_data.set_index("SYMBOL").to_dict(orient="index")
     else:
         cm_lookup = {}
