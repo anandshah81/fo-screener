@@ -187,69 +187,119 @@ def download_participant_oi(trade_date: date, session: requests.Session) -> pd.D
 def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     """
     Extract FUTSTK current-month contracts from F&O bhavcopy.
+    Handles both new UDiFF format (post July 2024) and old format.
     Returns per-stock: OI, prev OI, close price, prev close.
     """
-    # Filter for stock futures only
-    fut = df[df.get("INSTRUMENT", df.get("INSTTYPE", pd.Series())).str.strip() == "FUTSTK"].copy()
-    if fut.empty:
-        # Try alternate column names
-        for col in df.columns:
-            if "INST" in col:
-                fut = df[df[col].str.strip() == "FUTSTK"].copy()
-                if not fut.empty:
-                    break
+    logger.info(f"F&O Bhavcopy columns: {list(df.columns)}")
+
+    # ── Detect format and build unified column map ──────────────
+    cols_upper = {c: c.upper().strip() for c in df.columns}
+
+    # UDiFF format uses: FinInstrmTp, TckrSymb, XpryDt, SttlmPric, OpnIntrst, ChngInOpnIntrst
+    # Old format uses: INSTRUMENT, SYMBOL, EXPIRY_DT, CLOSE/SETTLE_PR, OPEN_INT, CHG_IN_OI
+
+    col_map = {}
+    for c, cu in cols_upper.items():
+        # Instrument type
+        if cu in ("FININSTRMTP", "INSTRUMENT", "INSTTYPE", "INSTRM"):
+            col_map[c] = "INSTRUMENT"
+        # Symbol
+        elif cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME", "SCRIP"):
+            col_map[c] = "SYMBOL"
+        # Expiry date
+        elif cu in ("XPRYDT", "EXPIRY_DT", "EXPDATE", "EXPIRYDATE", "EXP_DT"):
+            col_map[c] = "EXPIRY_DT"
+        # Close / settle price
+        elif cu in ("STTLMPRIC", "CLOSE", "SETTLE_PR", "SETTLPR", "CLOSE_PR", "CLOSEPRICE", "LASTPRC"):
+            col_map[c] = "CLOSE"
+        # Prev close
+        elif cu in ("PREVCLOSE", "PREV_CLOSE", "PREV_CLS", "PREVCLS"):
+            col_map[c] = "PREV_CLOSE"
+        # Open interest
+        elif cu in ("OPNINTRST", "OPEN_INT", "OPENINT", "OI", "OPENINTEREST"):
+            col_map[c] = "OI"
+        # OI change
+        elif cu in ("CHNGINOPNINTRST", "CHNGINOPNINTRST", "CHG_IN_OI", "OI_CHANGE",
+                    "CHNG_IN_OI", "CHANGEINOI", "CHNGOPNINT"):
+            col_map[c] = "OI_CHANGE_ABS"
+
+    df2 = df.rename(columns=col_map)
+
+    # ── Filter for stock futures (FUTSTK) ───────────────────────
+    fut = pd.DataFrame()
+    if "INSTRUMENT" in df2.columns:
+        mask = df2["INSTRUMENT"].astype(str).str.strip().str.upper() == "FUTSTK"
+        fut = df2[mask].copy()
 
     if fut.empty:
-        logger.warning("No FUTSTK rows found in F&O bhavcopy!")
+        # UDiFF may use different instrument type codes — try common variants
+        if "INSTRUMENT" in df2.columns:
+            unique_vals = df2["INSTRUMENT"].astype(str).str.strip().str.upper().unique()
+            logger.info(f"Unique instrument types: {unique_vals}")
+            # Try partial match
+            for val in unique_vals:
+                if "FUT" in val and "STK" in val:
+                    fut = df2[df2["INSTRUMENT"].astype(str).str.strip().str.upper() == val].copy()
+                    if not fut.empty:
+                        logger.info(f"Matched instrument type: {val}")
+                        break
+
+    if fut.empty:
+        logger.warning("No FUTSTK rows found — check instrument type column values above")
         return pd.DataFrame()
 
-    # Standardise column names
-    col_map = {}
-    for c in fut.columns:
-        cu = c.upper().strip()
-        if "SYMBOL" in cu:
-            col_map[c] = "SYMBOL"
-        elif "EXPIRY" in cu or "EXPDT" in cu:
-            col_map[c] = "EXPIRY_DT"
-        elif cu in ("CLOSE", "SETTLE_PR", "SETTLPR", "CLOSE_PR"):
-            col_map[c] = "CLOSE"
-        elif cu in ("PREVCLOSE", "PREV_CLOSE", "PREV_CLS"):
-            col_map[c] = "PREV_CLOSE"
-        elif cu in ("OPEN_INT", "OPENINT", "OI"):
-            col_map[c] = "OI"
-        elif cu in ("CHG_IN_OI", "OI_CHANGE", "CHNG_IN_OI"):
-            col_map[c] = "OI_CHANGE_ABS"
-    fut = fut.rename(columns=col_map)
+    logger.info(f"FUTSTK rows found: {len(fut)}")
 
-    # Parse expiry dates and pick current month
-    fut["EXPIRY_DT"] = pd.to_datetime(fut["EXPIRY_DT"], dayfirst=True, errors="coerce")
-    current_month = pd.Timestamp(trade_date).replace(day=1)
-    next_month = (current_month + pd.DateOffset(months=1))
-    current_contracts = fut[
-        (fut["EXPIRY_DT"] >= current_month) & (fut["EXPIRY_DT"] < next_month)
-    ]
+    # ── Parse expiry dates and pick nearest expiry ───────────────
+    if "EXPIRY_DT" in fut.columns:
+        fut["EXPIRY_DT"] = pd.to_datetime(fut["EXPIRY_DT"], dayfirst=True, errors="coerce")
+        current_month = pd.Timestamp(trade_date).replace(day=1)
+        next_month = current_month + pd.DateOffset(months=1)
+        current_contracts = fut[
+            (fut["EXPIRY_DT"] >= current_month) & (fut["EXPIRY_DT"] < next_month)
+        ].copy()
+        if current_contracts.empty:
+            # Fallback: nearest expiry
+            nearest = fut["EXPIRY_DT"].dropna().min()
+            current_contracts = fut[fut["EXPIRY_DT"] == nearest].copy()
+            logger.info(f"No current month contracts — using nearest expiry: {nearest}")
+    else:
+        current_contracts = fut.copy()
+        logger.warning("No EXPIRY_DT column found — using all FUTSTK rows")
+
     if current_contracts.empty:
-        # Fallback: use nearest expiry
-        fut_sorted = fut.sort_values("EXPIRY_DT")
-        nearest = fut_sorted["EXPIRY_DT"].dropna().min()
-        current_contracts = fut[fut["EXPIRY_DT"] == nearest]
+        logger.warning("No contracts found after expiry filter!")
+        return pd.DataFrame()
 
-    # Aggregate (multiple strikes shouldn't exist for FUTSTK but just in case)
-    agg = current_contracts.groupby("SYMBOL").agg(
-        FO_CLOSE=("CLOSE", "last"),
-        OI=("OI", "sum"),
-    ).reset_index()
+    # ── Ensure numeric columns ───────────────────────────────────
+    for num_col in ("CLOSE", "OI", "OI_CHANGE_ABS", "PREV_CLOSE"):
+        if num_col in current_contracts.columns:
+            current_contracts[num_col] = pd.to_numeric(current_contracts[num_col], errors="coerce")
 
-    # Compute prev OI and prev close if available
+    # ── Aggregate per symbol ─────────────────────────────────────
+    agg_dict = {}
+    if "CLOSE" in current_contracts.columns:
+        agg_dict["FO_CLOSE"] = ("CLOSE", "last")
+    if "OI" in current_contracts.columns:
+        agg_dict["OI"] = ("OI", "sum")
+
+    if not agg_dict or "SYMBOL" not in current_contracts.columns:
+        logger.warning("Missing SYMBOL or CLOSE/OI columns after parsing!")
+        return pd.DataFrame()
+
+    agg = current_contracts.groupby("SYMBOL").agg(**agg_dict).reset_index()
+
+    # Prev close
     if "PREV_CLOSE" in current_contracts.columns:
         prev = current_contracts.groupby("SYMBOL").agg(
-            FO_PREV_CLOSE=("PREV_CLOSE", "last"),
+            FO_PREV_CLOSE=("PREV_CLOSE", "last")
         ).reset_index()
         agg = agg.merge(prev, on="SYMBOL", how="left")
 
+    # OI change
     if "OI_CHANGE_ABS" in current_contracts.columns:
         oi_chg = current_contracts.groupby("SYMBOL").agg(
-            OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum"),
+            OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum")
         ).reset_index()
         agg = agg.merge(oi_chg, on="SYMBOL", how="left")
         agg["OI_PREV"] = agg["OI"] - agg["OI_CHANGE_ABS"]
@@ -263,43 +313,62 @@ def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         np.nan,
     )
 
+    logger.info(f"Parsed {len(agg)} stocks from F&O bhavcopy")
     return agg
 
 
 def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
-    """Extract equity close, prev close, and delivery % from CM bhavcopy."""
+    """
+    Extract equity close, prev close, and delivery % from CM bhavcopy.
+    Handles both new UDiFF format (post July 2024) and old format.
+    UDiFF columns: TckrSymb, SriesSrs, ClsPric, PrvsClsgPric, TtlTradgVol, DlvryQty, DlvryQtyPctgOfTradgQty
+    """
+    logger.info(f"CM Bhavcopy columns: {list(df.columns)}")
+
     col_map = {}
     for c in df.columns:
         cu = c.upper().strip()
-        if "SYMBOL" in cu:
+        # Symbol
+        if cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME", "SCRIP"):
             col_map[c] = "SYMBOL"
-        elif cu in ("CLOSE", "CLOSE_PRICE", "CLOSEPRICE", "LTP"):
-            col_map[c] = "CM_CLOSE"
-        elif cu in ("PREVCLOSE", "PREV_CLOSE", "PREV_CLS"):
-            col_map[c] = "CM_PREV_CLOSE"
-        elif "DELIV" in cu and "%" in cu:
-            col_map[c] = "DELIVERY_PCT"
-        elif "DELIV" in cu and "QTY" in cu:
-            col_map[c] = "DELIVERY_QTY"
-        elif cu in ("TTL_TRD_QNTY", "TOTAL_TRADE_QTY", "TOTTRDQTY", "TOT_TRD_QTY"):
-            col_map[c] = "TOTAL_QTY"
-        elif cu == "SERIES":
+        # Series
+        elif cu in ("SRIESSRS", "SERIES", "SRSTYPE"):
             col_map[c] = "SERIES"
+        # Close price
+        elif cu in ("CLSPRIC", "CLOSE", "CLOSE_PRICE", "CLOSEPRICE", "LTP", "LASTPRC"):
+            col_map[c] = "CM_CLOSE"
+        # Prev close
+        elif cu in ("PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE", "PREV_CLS", "PREVCLS"):
+            col_map[c] = "CM_PREV_CLOSE"
+        # Delivery %
+        elif cu in ("DLVRYQTYPCTGOFTRADGQTY", "DELIV_PER", "DELIVERYPER",
+                    "DELIV_%", "DELIVERY_PCT", "DELVRYPCT"):
+            col_map[c] = "DELIVERY_PCT"
+        # Delivery qty
+        elif cu in ("DLVRYQTY", "DELIVERYQTY", "DELIV_QTY", "DELIVERY_QTY"):
+            col_map[c] = "DELIVERY_QTY"
+        # Total traded qty
+        elif cu in ("TTLTRADGVOL", "TTL_TRD_QNTY", "TOTAL_TRADE_QTY",
+                    "TOTTRDQTY", "TOT_TRD_QTY", "TOTALTRADEDQUANTITY"):
+            col_map[c] = "TOTAL_QTY"
 
     df2 = df.rename(columns=col_map)
 
     # Keep EQ series only
     if "SERIES" in df2.columns:
-        df2 = df2[df2["SERIES"].str.strip() == "EQ"]
+        df2 = df2[df2["SERIES"].astype(str).str.strip().str.upper() == "EQ"].copy()
 
     # Compute delivery % if not already present
     if "DELIVERY_PCT" not in df2.columns:
         if "DELIVERY_QTY" in df2.columns and "TOTAL_QTY" in df2.columns:
-            df2["DELIVERY_PCT"] = pd.to_numeric(df2["DELIVERY_QTY"], errors="coerce") / \
-                                   pd.to_numeric(df2["TOTAL_QTY"], errors="coerce") * 100
+            df2["DELIVERY_PCT"] = (
+                pd.to_numeric(df2["DELIVERY_QTY"], errors="coerce") /
+                pd.to_numeric(df2["TOTAL_QTY"], errors="coerce") * 100
+            )
 
     keep = ["SYMBOL", "CM_CLOSE", "CM_PREV_CLOSE", "DELIVERY_PCT"]
     existing = [c for c in keep if c in df2.columns]
+    logger.info(f"CM bhavcopy parsed: {len(df2)} EQ rows, columns: {existing}")
     return df2[existing].copy()
 
 
