@@ -1,0 +1,25 @@
+# F&O Morning Screener — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core data
+pandas>=2.0.0
+numpy>=1.24.0
+
+# NSE data + finance
+yfinance>=0.2.36
+requests>=2.31.0
+
+# Technical analysis (optional — pure pandas fallback is built-in)
+# pandas-ta>=0.3.14b0
+
+# Google Sheets
+gspread>=6.0.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# Compression / zip handling (stdlib, but explicit)
+# zipfile — stdlib
+
+# HTTP retries
+urllib3>=2.0.0

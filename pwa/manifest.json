@@ -1,0 +1,37 @@
+{
+  "name": "F&O Morning Screener",
+  "short_name": "FO Screener",
+  "description": "NSE F&O Stock Screening Dashboard for Indian Markets",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#0f0f1a",
+  "theme_color": "#6c63ff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Top Longs",
+      "url": "/index.html#longs",
+      "description": "View top long candidates"
+    },
+    {
+      "name": "Top Shorts",
+      "url": "/index.html#shorts",
+      "description": "View top short candidates"
+    }
+  ]
+}

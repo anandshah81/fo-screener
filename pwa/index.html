@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f0f1a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FO Screener" />
+  <title>F&amp;O Morning Screener</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <style>
+    /* ─── RESET & BASE ───────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg-primary:   #0f0f1a;
+      --bg-card:      #1a1a2e;
+      --bg-card2:     #16213e;
+      --bg-input:     #0d0d1a;
+      --accent:       #6c63ff;
+      --accent2:      #a29bfe;
+      --green:        #00b894;
+      --green-dim:    #1a4a3a;
+      --red:          #e17055;
+      --red-dim:      #4a1a1a;
+      --yellow:       #fdcb6e;
+      --text:         #e8e8f0;
+      --text-dim:     #8888aa;
+      --border:       #2a2a4a;
+      --radius:       12px;
+      --radius-sm:    8px;
+      --font:         -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    html { font-size: 16px; scroll-behavior: smooth; }
+    body {
+      font-family: var(--font);
+      background: var(--bg-primary);
+      color: var(--text);
+      min-height: 100vh;
+      padding-bottom: env(safe-area-inset-bottom, 80px);
+      overflow-x: hidden;
+    }
+
+    /* ─── INSTALL BANNER ─────────────────────────── */
+    #install-banner {
+      display: none;
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      background: var(--accent);
+      color: white;
+      padding: 12px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 14px;
+    }
+    #install-banner.hidden { display: none !important; }
+    #install-banner button {
+      background: white; color: var(--accent);
+      border: none; border-radius: 6px;
+      padding: 6px 14px; font-weight: 700; cursor: pointer;
+    }
+
+    /* ─── OFFLINE BANNER ─────────────────────────── */
+    #offline-banner {
+      display: none;
+      background: #2d2d00; color: var(--yellow);
+      text-align: center; padding: 8px;
+      font-size: 13px; border-bottom: 1px solid var(--yellow);
+    }
+    #offline-banner.show { display: block; }
+
+    /* ─── HEADER ─────────────────────────────────── */
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      padding: 20px 16px 16px;
+      padding-top: calc(20px + env(safe-area-inset-top, 0px));
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(20px);
+    }
+    .header-top {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .header-title { font-size: 18px; font-weight: 700; color: var(--accent2); }
+    .header-sub { font-size: 12px; color: var(--text-dim); }
+    .bias-badge {
+      font-size: 11px; font-weight: 700; padding: 4px 10px;
+      border-radius: 20px; letter-spacing: 0.5px;
+    }
+    .bias-BULLISH  { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+    .bias-BEARISH  { background: var(--red-dim);   color: var(--red);   border: 1px solid var(--red); }
+    .bias-NEUTRAL  { background: #2d2d10; color: var(--yellow); border: 1px solid var(--yellow); }
+    .last-updated { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+    /* ─── TAB NAV ─────────────────────────────────── */
+    .tab-nav {
+      display: flex; overflow-x: auto;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 86px; z-index: 99;
+      scrollbar-width: none;
+    }
+    .tab-nav::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      flex: 0 0 auto;
+      padding: 12px 20px;
+      background: none; border: none;
+      color: var(--text-dim); font-size: 13px; font-weight: 600;
+      cursor: pointer; white-space: nowrap;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab-btn.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+    /* ─── CONTENT AREA ───────────────────────────── */
+    .tab-content { display: none; padding: 16px; }
+    .tab-content.active { display: block; }
+
+    /* ─── LOADING ─────────────────────────────────── */
+    .loading-overlay {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 60vh; gap: 16px;
+    }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { color: var(--text-dim); font-size: 14px; }
+
+    /* ─── MACRO CARD ─────────────────────────────── */
+    .macro-card {
+      background: var(--bg-card2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px; margin-bottom: 16px;
+    }
+    .macro-card h3 { font-size: 12px; color: var(--text-dim); text-transform: uppercase;
+      letter-spacing: 1px; margin-bottom: 12px; }
+    .macro-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .macro-stat label { font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 2px; }
+    .macro-stat .value { font-size: 15px; font-weight: 700; }
+    .macro-stat .value.bull { color: var(--green); }
+    .macro-stat .value.bear { color: var(--red); }
+    .macro-stat .value.neutral { color: var(--yellow); }
+
+    /* ─── SECTION TITLE ──────────────────────────── */
+    .section-title {
+      font-size: 13px; font-weight: 700;
+      color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px;
+      margin: 20px 0 10px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .section-title span { flex: 1; height: 1px; background: var(--border); }
+
+    /* ─── STOCK CARD ─────────────────────────────── */
+    .stock-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px; margin-bottom: 10px;
+      transition: border-color 0.2s;
+    }
+    .stock-card.long  { border-left: 3px solid var(--green); }
+    .stock-card.short { border-left: 3px solid var(--red); }
+    .stock-card.alert { border-left: 3px solid var(--yellow); }
+    .stock-card:active { border-color: var(--accent); }
+
+    .card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .stock-name { font-size: 17px; font-weight: 800; letter-spacing: 0.3px; }
+    .composite-score {
+      font-size: 22px; font-weight: 900;
+    }
+    .composite-score.positive { color: var(--green); }
+    .composite-score.negative { color: var(--red); }
+    .composite-score.neutral  { color: var(--text-dim); }
+
+    .score-bar-container {
+      background: var(--bg-input);
+      border-radius: 4px; height: 6px;
+      margin: 6px 0 10px; overflow: hidden;
+    }
+    .score-bar {
+      height: 100%; border-radius: 4px;
+      transition: width 0.5s ease;
+    }
+    .score-bar.positive { background: linear-gradient(90deg, var(--green-dim), var(--green)); }
+    .score-bar.negative { background: linear-gradient(90deg, var(--red), var(--red-dim)); }
+
+    .card-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .tag {
+      font-size: 10px; font-weight: 700; padding: 3px 8px;
+      border-radius: 4px; letter-spacing: 0.3px; text-transform: uppercase;
+    }
+    .tag.lb  { background: rgba(0,184,148,0.15); color: var(--green); border: 1px solid rgba(0,184,148,0.3); }
+    .tag.sc  { background: rgba(108,99,255,0.15); color: var(--accent2); border: 1px solid rgba(108,99,255,0.3); }
+    .tag.sb  { background: rgba(225,112,85,0.15); color: var(--red); border: 1px solid rgba(225,112,85,0.3); }
+    .tag.lu  { background: rgba(253,203,110,0.15); color: var(--yellow); border: 1px solid rgba(253,203,110,0.3); }
+    .tag.neutral { background: rgba(136,136,170,0.1); color: var(--text-dim); border: 1px solid var(--border); }
+
+    .card-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .metric { text-align: center; }
+    .metric-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
+    .metric-value { font-size: 13px; font-weight: 700; }
+    .metric-value.up   { color: var(--green); }
+    .metric-value.down { color: var(--red); }
+
+    .tech-row {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      margin-top: 8px; padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .tech-chip {
+      font-size: 10px; padding: 2px 7px; border-radius: 4px;
+      background: var(--bg-input); color: var(--text-dim);
+    }
+    .tech-chip.ok  { color: var(--green); background: var(--green-dim); }
+    .tech-chip.bad { color: var(--red);   background: var(--red-dim); }
+
+    /* ─── ALERT BADGE ────────────────────────────── */
+    .alerts-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(253,203,110,0.15);
+      border: 1px solid rgba(253,203,110,0.3);
+      color: var(--yellow); padding: 6px 12px;
+      border-radius: 20px; font-size: 13px; font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    /* ─── SEARCH BAR ─────────────────────────────── */
+    .search-bar {
+      display: flex; gap: 8px; margin-bottom: 12px;
+    }
+    .search-input {
+      flex: 1; background: var(--bg-card2);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--text); padding: 10px 14px; font-size: 14px;
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--accent); }
+    .sort-select {
+      background: var(--bg-card2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text);
+      padding: 10px 8px; font-size: 13px; outline: none;
+    }
+
+    /* ─── UNIVERSE TABLE ─────────────────────────── */
+    .universe-list { display: flex; flex-direction: column; gap: 6px; }
+    .universe-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .universe-row.long  { border-left: 3px solid var(--green); }
+    .universe-row.short { border-left: 3px solid var(--red); }
+    .u-rank  { width: 28px; font-size: 12px; color: var(--text-dim); text-align: center; flex-shrink: 0; }
+    .u-sym   { width: 90px; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+    .u-score { width: 42px; font-size: 15px; font-weight: 900; text-align: right; flex-shrink: 0; }
+    .u-score.positive { color: var(--green); }
+    .u-score.negative { color: var(--red); }
+    .u-sig   { flex: 1; font-size: 11px; color: var(--text-dim); min-width: 0; }
+    .u-bar   { width: 60px; flex-shrink: 0; }
+
+    /* ─── SCORE BREAKDOWN ────────────────────────── */
+    .score-breakdown {
+      display: flex; gap: 4px; margin-top: 4px;
+    }
+    .sb-item {
+      flex: 1; text-align: center; padding: 4px;
+      background: var(--bg-input); border-radius: 4px;
+    }
+    .sb-label { font-size: 9px; color: var(--text-dim); }
+    .sb-val   { font-size: 13px; font-weight: 800; }
+    .sb-val.pos { color: var(--green); }
+    .sb-val.neg { color: var(--red); }
+
+    /* ─── ERROR STATE ────────────────────────────── */
+    .error-card {
+      background: var(--red-dim);
+      border: 1px solid var(--red);
+      border-radius: var(--radius);
+      padding: 20px; text-align: center;
+      margin: 20px 0;
+    }
+    .error-card h3 { color: var(--red); margin-bottom: 8px; }
+    .error-card p  { font-size: 13px; color: var(--text-dim); }
+
+    /* ─── REFRESH BTN ────────────────────────────── */
+    .refresh-btn {
+      position: fixed; bottom: 90px; right: 16px;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: var(--accent); border: none;
+      color: white; font-size: 20px; cursor: pointer;
+      box-shadow: 0 4px 20px rgba(108,99,255,0.4);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 200; transition: transform 0.2s;
+    }
+    .refresh-btn:active { transform: scale(0.9); }
+    .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
+
+    @media (min-width: 600px) {
+      .stock-card { max-width: 600px; margin-left: auto; margin-right: auto; }
+      .card-metrics { grid-template-columns: repeat(6, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- INSTALL BANNER -->
+<div id="install-banner" class="hidden">
+  <span>📲 Add F&amp;O Screener to Home Screen</span>
+  <button id="install-btn">Install</button>
+</div>
+
+<!-- OFFLINE BANNER -->
+<div id="offline-banner">⚡ You're offline — showing last cached data</div>
+
+<!-- HEADER -->
+<header>
+  <div class="header-top">
+    <div>
+      <div class="header-title">📊 F&amp;O Screener</div>
+      <div class="header-sub" id="header-date">Loading...</div>
+    </div>
+    <div class="bias-badge" id="bias-badge">···</div>
+  </div>
+  <div class="last-updated" id="last-updated"></div>
+</header>
+
+<!-- TAB NAV -->
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="home">🏠 Home</button>
+  <button class="tab-btn" data-tab="longs">🟢 Longs</button>
+  <button class="tab-btn" data-tab="shorts">🔴 Shorts</button>
+  <button class="tab-btn" data-tab="alerts">⚠️ Alerts</button>
+  <button class="tab-btn" data-tab="universe">🌐 Universe</button>
+</nav>
+
+<!-- HOME TAB -->
+<div id="tab-home" class="tab-content active">
+  <div class="loading-overlay" id="home-loading">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading market data...</div>
+  </div>
+  <div id="home-content" style="display:none">
+    <!-- Macro card -->
+    <div class="macro-card" id="macro-card"></div>
+    <!-- Top 5 Longs -->
+    <div class="section-title">🟢 Top 5 Longs <span></span></div>
+    <div id="home-longs"></div>
+    <!-- Top 5 Shorts -->
+    <div class="section-title">🔴 Top 5 Shorts <span></span></div>
+    <div id="home-shorts"></div>
+    <!-- OI Alerts -->
+    <div class="section-title">⚠️ OI Alerts <span></span></div>
+    <div id="home-alerts-preview"></div>
+  </div>
+</div>
+
+<!-- LONGS TAB -->
+<div id="tab-longs" class="tab-content">
+  <div class="loading-overlay" id="longs-loading">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading longs...</div>
+  </div>
+  <div id="longs-content" style="display:none">
+    <div class="section-title">🟢 Top 10 Long Candidates <span></span></div>
+    <div id="longs-list"></div>
+  </div>
+</div>
+
+<!-- SHORTS TAB -->
+<div id="tab-shorts" class="tab-content">
+  <div class="loading-overlay" id="shorts-loading">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading shorts...</div>
+  </div>
+  <div id="shorts-content" style="display:none">
+    <div class="section-title">🔴 Top 10 Short Candidates <span></span></div>
+    <div id="shorts-list"></div>
+  </div>
+</div>
+
+<!-- ALERTS TAB -->
+<div id="tab-alerts" class="tab-content">
+  <div id="alerts-list"></div>
+</div>
+
+<!-- UNIVERSE TAB -->
+<div id="tab-universe" class="tab-content">
+  <div class="search-bar">
+    <input type="search" class="search-input" id="universe-search" placeholder="Search stock..." />
+    <select class="sort-select" id="universe-sort">
+      <option value="composite">Composite</option>
+      <option value="technical">Technical</option>
+      <option value="fo">F&O Score</option>
+      <option value="oi">OI Change</option>
+    </select>
+  </div>
+  <div class="universe-list" id="universe-list"></div>
+</div>
+
+<!-- REFRESH BUTTON -->
+<button class="refresh-btn" id="refresh-btn" title="Refresh data">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+    <polyline points="1 4 1 10 7 10"></polyline>
+    <path d="M3.51 15a9 9 0 1 0 .49-4"></path>
+  </svg>
+</button>
+
+<script>
+// ─── CONFIG ─────────────────────────────────────────────────────
+// IMPORTANT: Replace with your actual Google Sheet ID and sheet GID values
+const SHEET_ID = "https://docs.google.com/spreadsheets/d/1P9owULYqmqBcvlzbQnUoCA3qBaJYviIVj25gaHx9Dsg/edit"; // ← Replace this
+
+// Google Sheets public CSV export URLs per tab
+// Make sure the sheet is shared as "Anyone with link can view"
+function sheetCsvUrl(gid) {
+  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
+}
+
+// Tab GIDs (find these in the Google Sheet URL when you click each tab)
+// Format: &gid=XXXXXXXX
+const TAB_GIDS = {
+  morning_brief: "0",          // First tab is usually 0
+  top_longs:     "1",          // Update after creating sheet
+  top_shorts:    "2",
+  oi_alerts:     "3",
+  full_universe: "4",
+};
+
+// ─── STATE ──────────────────────────────────────────────────────
+let appData = null;
+let isLoading = false;
+let deferredPrompt = null;
+let universeData = [];
+
+// ─── UTILS ──────────────────────────────────────────────────────
+function fmtPct(v, decimals = 1) {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = parseFloat(v);
+  if (isNaN(n)) return "—";
+  return (n >= 0 ? "+" : "") + n.toFixed(decimals) + "%";
+}
+
+function fmtScore(v) {
+  if (v === null || v === undefined || v === "") return "0";
+  return parseInt(v) || "0";
+}
+
+function scoreClass(v) {
+  const n = parseInt(v) || 0;
+  return n > 0 ? "positive" : n < 0 ? "negative" : "neutral";
+}
+
+function scoreBarWidth(v, max = 18) {
+  const n = parseInt(v) || 0;
+  return Math.round(((n + max) / (2 * max)) * 100);
+}
+
+function oiSignalTag(signal) {
+  const map = {
+    "LONG BUILDUP": "lb", "SHORT COVERING": "sc",
+    "SHORT BUILDUP": "sb", "LONG UNWINDING": "lu",
+  };
+  return map[signal] || "neutral";
+}
+
+function boolChip(label, isOk) {
+  return `<span class="tech-chip ${isOk ? "ok" : "bad"}">${isOk ? "✓" : "✗"} ${label}</span>`;
+}
+
+function valChip(label, value) {
+  return `<span class="tech-chip">${label}: ${value ?? "—"}</span>`;
+}
+
+// ─── CSV PARSER ──────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map(h => h.trim().replace(/"/g, ""));
+  return lines.slice(1).map(line => {
+    const vals = line.match(/(".*?"|[^,]+)(?=,|$)/g) || [];
+    const row = {};
+    headers.forEach((h, i) => {
+      row[h] = (vals[i] || "").replace(/"/g, "").trim();
+    });
+    return row;
+  });
+}
+
+// ─── DATA FETCHING ───────────────────────────────────────────────
+async function fetchSheetData() {
+  if (SHEET_ID === "YOUR_GOOGLE_SHEET_ID_HERE") {
+    return getDemoData();
+  }
+
+  try {
+    const [longsResp, shortsResp, alertsResp, universeResp] = await Promise.all([
+      fetch(sheetCsvUrl(TAB_GIDS.top_longs)),
+      fetch(sheetCsvUrl(TAB_GIDS.top_shorts)),
+      fetch(sheetCsvUrl(TAB_GIDS.oi_alerts)),
+      fetch(sheetCsvUrl(TAB_GIDS.full_universe)),
+    ]);
+
+    const [longsText, shortsText, alertsText, universeText] = await Promise.all([
+      longsResp.text(), shortsResp.text(), alertsResp.text(), universeResp.text(),
+    ]);
+
+    // Fetch brief for macro
+    const briefResp = await fetch(sheetCsvUrl(TAB_GIDS.morning_brief));
+    const briefText = await briefResp.text();
+
+    return {
+      brief: briefText,
+      top_longs:    parseCSV(longsText),
+      top_shorts:   parseCSV(shortsText),
+      oi_alerts:    parseCSV(alertsText),
+      full_universe: parseCSV(universeText),
+      last_updated: new Date().toLocaleTimeString("en-IN"),
+    };
+  } catch (err) {
+    console.error("Fetch error:", err);
+    throw err;
+  }
+}
+
+function getDemoData() {
+  const mkStock = (sym, cs, ts, fs, sig, oi, price, rsi, adx, vol) => ({
+    SYMBOL: sym, COMPOSITE_SCORE: cs, TECHNICAL_SCORE: ts, FO_SCORE: fs,
+    SIGNAL: sig, OI_SIGNAL: sig === "LONG BUILDUP" || sig === "SHORT COVERING" ? sig : "NEUTRAL",
+    OI_CHANGE_PCT: oi, PRICE: price, PRICE_CHANGE_PCT: (Math.random() * 4 - 2).toFixed(2),
+    RSI: rsi, ADX: adx, VOLUME_RATIO: vol,
+    EMA_SIGNAL: cs > 5 ? "BULLISH" : cs < -5 ? "BEARISH" : "MIXED",
+    MACD_SIGNAL: cs > 0 ? "BULLISH CROSS" : "BEARISH CROSS",
+    SUPERTREND_SIGNAL: cs > 0 ? "ABOVE" : "BELOW",
+    DELIVERY_PCT: (Math.random() * 60 + 20).toFixed(1),
+    ALERT_SEVERITY: Math.abs(oi) > 30 ? "HIGH" : "MEDIUM",
+    RANK: 1,
+  });
+
+  const longs = [
+    mkStock("RELIANCE", 15, 9, 6, "LONG BUILDUP", 28.3, 2891, 62, 31, 1.8),
+    mkStock("HDFCBANK", 13, 8, 5, "SHORT COVERING", 19.2, 1712, 58, 28, 1.6),
+    mkStock("INFY",     12, 7, 5, "LONG BUILDUP", 22.1, 1891, 61, 27, 1.4),
+    mkStock("TCS",      11, 7, 4, "LONG BUILDUP", 16.8, 4210, 59, 29, 1.3),
+    mkStock("AXISBANK", 10, 6, 4, "SHORT COVERING", 18.4, 1124, 55, 26, 1.5),
+    mkStock("LT",        9, 6, 3, "LONG BUILDUP", 14.1, 3421, 52, 26, 1.2),
+    mkStock("TATASTEEL", 9, 5, 4, "LONG BUILDUP", 20.5, 152, 56, 27, 1.7),
+    mkStock("BAJFINANCE", 8, 5, 3, "SHORT COVERING", 12.3, 7820, 50, 25, 1.1),
+    mkStock("WIPRO",     8, 5, 3, "LONG BUILDUP", 11.8, 542, 51, 25, 1.1),
+    mkStock("ICICIBANK", 8, 4, 4, "LONG BUILDUP", 17.2, 1241, 53, 26, 1.3),
+  ];
+
+  const shorts = [
+    mkStock("ZEEL",     -15, -9, -6, "SHORT BUILDUP", -32.1, 142, 32, 31, 1.9),
+    mkStock("IDEA",     -13, -8, -5, "LONG UNWINDING", -24.8, 12, 28, 28, 1.7),
+    mkStock("DELTACORP",-12, -7, -5, "SHORT BUILDUP", -21.2, 198, 31, 27, 1.5),
+    mkStock("GMRINFRA", -10, -6, -4, "SHORT BUILDUP", -18.9, 82, 33, 26, 1.4),
+    mkStock("PNB",       -9, -6, -3, "LONG UNWINDING", -15.3, 89, 36, 25, 1.3),
+  ];
+
+  const alerts = [...longs, ...shorts].filter(s => Math.abs(s.OI_CHANGE_PCT) > 20);
+  const universe = [...longs, ...shorts,
+    mkStock("MARUTI", 5, 3, 2, "NEUTRAL", 8.1, 12821, 48, 22, 0.9),
+    mkStock("SUNPHARMA", 4, 3, 1, "NEUTRAL", 5.2, 1821, 47, 21, 0.8),
+    mkStock("BHARTIARTL", 6, 4, 2, "NEUTRAL", 9.8, 1421, 51, 24, 1.0),
+    mkStock("NTPC", 3, 2, 1, "NEUTRAL", 4.1, 421, 48, 20, 0.9),
+    mkStock("POWERGRID", 2, 1, 1, "NEUTRAL", 3.2, 321, 46, 19, 0.8),
+  ].map((s, i) => ({ ...s, RANK: i + 1 }));
+
+  return {
+    macro: { market_bias: "BULLISH", fii_index_fut_net: 52100, fii_total_net: 38200 },
+    trade_date: new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
+    top_longs: longs,
+    top_shorts: shorts,
+    oi_alerts: alerts,
+    full_universe: universe.sort((a, b) => b.COMPOSITE_SCORE - a.COMPOSITE_SCORE),
+    last_updated: new Date().toLocaleTimeString("en-IN"),
+    is_demo: true,
+  };
+}
+
+// ─── RENDER FUNCTIONS ────────────────────────────────────────────
+
+function renderMacroCard(data) {
+  const macro = data.macro || {};
+  const bias = macro.market_bias || macro["Market Bias:"] || "NEUTRAL";
+  const fiiNet = macro.fii_index_fut_net || 0;
+  const dir = fiiNet >= 0 ? "Net LONG" : "Net SHORT";
+  const biasEmoji = { BULLISH: "🟢", BEARISH: "🔴", NEUTRAL: "🟡" }[bias] || "🟡";
+  const cls = { BULLISH: "bull", BEARISH: "bear", NEUTRAL: "neutral" }[bias] || "neutral";
+
+  return `
+    <h3>🌐 Macro Context</h3>
+    <div class="macro-grid">
+      <div class="macro-stat">
+        <label>Market Bias</label>
+        <div class="value ${cls}">${biasEmoji} ${bias}</div>
+      </div>
+      <div class="macro-stat">
+        <label>FII Index Futures</label>
+        <div class="value ${fiiNet >= 0 ? "bull" : "bear"}">${dir}<br><small>${Math.abs(fiiNet).toLocaleString("en-IN")}</small></div>
+      </div>
+      <div class="macro-stat">
+        <label>FII Total Net</label>
+        <div class="value ${(macro.fii_total_net||0) >= 0 ? "bull" : "bear"}">${(macro.fii_total_net||0).toLocaleString("en-IN")}</div>
+      </div>
+      <div class="macro-stat">
+        <label>As of</label>
+        <div class="value" style="font-size:13px">${data.trade_date || "—"}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderStockCard(stock, type = "long", compact = false) {
+  const sym   = stock.SYMBOL || "";
+  const cs    = parseInt(stock.COMPOSITE_SCORE) || 0;
+  const ts    = parseInt(stock.TECHNICAL_SCORE) || 0;
+  const fs    = parseInt(stock.FO_SCORE) || 0;
+  const oi    = parseFloat(stock.OI_CHANGE_PCT);
+  const price = stock.PRICE;
+  const pchg  = parseFloat(stock.PRICE_CHANGE_PCT);
+  const rsi   = parseFloat(stock.RSI);
+  const adx   = parseFloat(stock.ADX);
+  const vol   = parseFloat(stock.VOLUME_RATIO);
+  const sig   = stock.OI_SIGNAL || "";
+  const ema   = stock.EMA_SIGNAL || "";
+  const macd  = stock.MACD_SIGNAL || "";
+  const st    = stock.SUPERTREND_SIGNAL || "";
+  const dlv   = parseFloat(stock.DELIVERY_PCT);
+
+  const barW = scoreBarWidth(cs);
+  const barCls = cs >= 0 ? "positive" : "negative";
+  const tagCls = oiSignalTag(sig);
+
+  return `
+    <div class="stock-card ${type}">
+      <div class="card-header">
+        <div class="stock-name">${sym}</div>
+        <div class="composite-score ${scoreClass(cs)}">${cs > 0 ? "+" : ""}${cs}</div>
+      </div>
+      <div class="score-bar-container">
+        <div class="score-bar ${barCls}" style="width:${barW}%"></div>
+      </div>
+      <div class="card-tags">
+        <span class="tag ${tagCls}">${sig || "NEUTRAL"}</span>
+        ${ema ? `<span class="tag ${ema === "BULLISH" ? "lb" : ema === "BEARISH" ? "sb" : "neutral"}">EMA ${ema}</span>` : ""}
+      </div>
+      <div class="card-metrics">
+        <div class="metric">
+          <div class="metric-label">OI Chg</div>
+          <div class="metric-value ${isNaN(oi) ? "" : oi >= 0 ? "up" : "down"}">${fmtPct(oi)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Price Chg</div>
+          <div class="metric-value ${isNaN(pchg) ? "" : pchg >= 0 ? "up" : "down"}">${fmtPct(pchg)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Delivery</div>
+          <div class="metric-value">${isNaN(dlv) ? "—" : dlv.toFixed(1) + "%"}</div>
+        </div>
+      </div>
+      ${!compact ? `
+      <div class="score-breakdown">
+        <div class="sb-item"><div class="sb-label">Tech</div><div class="sb-val ${ts >= 0 ? "pos" : "neg"}">${ts > 0 ? "+" : ""}${ts}</div></div>
+        <div class="sb-item"><div class="sb-label">F&O</div><div class="sb-val ${fs >= 0 ? "pos" : "neg"}">${fs > 0 ? "+" : ""}${fs}</div></div>
+        <div class="sb-item"><div class="sb-label">RSI</div><div class="sb-val">${isNaN(rsi) ? "—" : rsi.toFixed(0)}</div></div>
+        <div class="sb-item"><div class="sb-label">ADX</div><div class="sb-val">${isNaN(adx) ? "—" : adx.toFixed(0)}</div></div>
+        <div class="sb-item"><div class="sb-label">Vol×</div><div class="sb-val ${isNaN(vol) ? "" : vol >= 1.5 ? "pos" : vol <= 0.5 ? "neg" : ""}">${isNaN(vol) ? "—" : vol.toFixed(1)}</div></div>
+      </div>
+      <div class="tech-row">
+        ${boolChip("EMA", ema === "BULLISH" || (type === "short" && ema === "BEARISH"))}
+        ${boolChip("MACD", macd.includes("CROSS"))}
+        ${boolChip("ST", type === "long" ? st === "ABOVE" : st === "BELOW")}
+        ${valChip("RSI", isNaN(rsi) ? "—" : rsi.toFixed(0))}
+        ${valChip("ADX", isNaN(adx) ? "—" : adx.toFixed(0))}
+        ${valChip("Vol", isNaN(vol) ? "—" : vol.toFixed(1) + "×")}
+      </div>` : ""}
+    </div>
+  `;
+}
+
+function renderAlertCard(stock) {
+  const sym = stock.SYMBOL || "";
+  const oi  = parseFloat(stock.OI_CHANGE_PCT);
+  const px  = parseFloat(stock.PRICE_CHANGE_PCT);
+  const sig = stock.OI_SIGNAL || stock.Classification || "";
+  const sev = stock["Alert Severity"] || stock.ALERT_SEVERITY || "MEDIUM";
+  const cs  = parseInt(stock.COMPOSITE_SCORE || stock["Composite Score"]) || 0;
+
+  return `
+    <div class="stock-card alert">
+      <div class="card-header">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:16px">${sev === "HIGH" ? "🔥" : "⚡"}</span>
+          <div class="stock-name">${sym}</div>
+        </div>
+        <div class="composite-score ${scoreClass(cs)}">${cs > 0 ? "+" : ""}${cs}</div>
+      </div>
+      <div class="card-tags">
+        <span class="tag ${oiSignalTag(sig)}">${sig}</span>
+        <span class="tag ${sev === "HIGH" ? "sb" : "lu"}">${sev} ALERT</span>
+      </div>
+      <div class="card-metrics">
+        <div class="metric">
+          <div class="metric-label">OI Change</div>
+          <div class="metric-value ${isNaN(oi) ? "" : oi >= 0 ? "up" : "down"}" style="font-size:16px">${fmtPct(oi)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Price Change</div>
+          <div class="metric-value ${isNaN(px) ? "" : px >= 0 ? "up" : "down"}">${fmtPct(px)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Score</div>
+          <div class="metric-value ${scoreClass(cs)}">${cs > 0 ? "+" : ""}${cs}/18</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderUniverseRow(stock, rank) {
+  const sym = stock.SYMBOL || "";
+  const cs  = parseInt(stock.COMPOSITE_SCORE) || 0;
+  const sig = stock.OI_SIGNAL || stock.SIGNAL || "";
+  const barW = scoreBarWidth(cs);
+  const type = cs >= 8 ? "long" : cs <= -8 ? "short" : "";
+
+  return `
+    <div class="universe-row ${type}">
+      <div class="u-rank">#${rank}</div>
+      <div class="u-sym">${sym}</div>
+      <div class="u-score ${scoreClass(cs)}">${cs > 0 ? "+" : ""}${cs}</div>
+      <div class="u-sig">${sig || "NEUTRAL"}</div>
+      <div class="u-bar">
+        <div class="score-bar-container" style="margin:0">
+          <div class="score-bar ${cs >= 0 ? "positive" : "negative"}" style="width:${barW}%;height:6px"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ─── RENDER ALL TABS ────────────────────────────────────────────
+
+function renderAll(data) {
+  appData = data;
+  universeData = data.full_universe || [];
+
+  // Header
+  const bias = (data.macro || {}).market_bias || "NEUTRAL";
+  document.getElementById("header-date").textContent =
+    `📅 ${data.trade_date || "—"} | NSE F&O`;
+  document.getElementById("last-updated").textContent =
+    data.last_updated ? `Last updated: ${data.last_updated}${data.is_demo ? " (DEMO)" : ""}` : "";
+
+  const badge = document.getElementById("bias-badge");
+  badge.textContent = bias;
+  badge.className = `bias-badge bias-${bias}`;
+
+  // HOME
+  document.getElementById("macro-card").innerHTML = renderMacroCard(data);
+
+  const longsTop = (data.top_longs || []).slice(0, 5);
+  document.getElementById("home-longs").innerHTML =
+    longsTop.map(s => renderStockCard(s, "long", true)).join("") || "<p style='color:var(--text-dim)'>No long candidates today</p>";
+
+  const shortsTop = (data.top_shorts || []).slice(0, 5);
+  document.getElementById("home-shorts").innerHTML =
+    shortsTop.map(s => renderStockCard(s, "short", true)).join("") || "<p style='color:var(--text-dim)'>No short candidates today</p>";
+
+  const alerts = (data.oi_alerts || []).slice(0, 3);
+  document.getElementById("home-alerts-preview").innerHTML =
+    `<div class="alerts-badge">⚠️ ${(data.oi_alerts||[]).length} OI Alert${(data.oi_alerts||[]).length !== 1 ? "s" : ""}</div>` +
+    alerts.map(s => renderAlertCard(s)).join("");
+
+  document.getElementById("home-loading").style.display = "none";
+  document.getElementById("home-content").style.display = "block";
+
+  // LONGS
+  const longs10 = (data.top_longs || []).slice(0, 10);
+  document.getElementById("longs-list").innerHTML =
+    longs10.map(s => renderStockCard(s, "long")).join("") || "<p style='color:var(--text-dim)'>No long candidates</p>";
+  document.getElementById("longs-loading").style.display = "none";
+  document.getElementById("longs-content").style.display = "block";
+
+  // SHORTS
+  const shorts10 = (data.top_shorts || []).slice(0, 10);
+  document.getElementById("shorts-list").innerHTML =
+    shorts10.map(s => renderStockCard(s, "short")).join("") || "<p style='color:var(--text-dim)'>No short candidates</p>";
+  document.getElementById("shorts-loading").style.display = "none";
+  document.getElementById("shorts-content").style.display = "block";
+
+  // ALERTS
+  const allAlerts = (data.oi_alerts || []).sort((a, b) =>
+    Math.abs(parseFloat(b.OI_CHANGE_PCT) || 0) - Math.abs(parseFloat(a.OI_CHANGE_PCT) || 0)
+  );
+  document.getElementById("alerts-list").innerHTML =
+    `<div class="section-title">⚠️ OI Alerts (${allAlerts.length}) <span></span></div>` +
+    (allAlerts.map(s => renderAlertCard(s)).join("") || "<p style='color:var(--text-dim)'>No OI alerts today</p>");
+
+  // UNIVERSE
+  renderUniverse();
+}
+
+function renderUniverse(filter = "", sortBy = "composite") {
+  let data = universeData || [];
+  if (filter) {
+    data = data.filter(s => (s.SYMBOL || "").toUpperCase().includes(filter.toUpperCase()));
+  }
+  const sortMap = {
+    composite: s => -(parseInt(s.COMPOSITE_SCORE) || 0),
+    technical: s => -(parseInt(s.TECHNICAL_SCORE) || 0),
+    fo:        s => -(parseInt(s.FO_SCORE) || 0),
+    oi:        s => -(Math.abs(parseFloat(s.OI_CHANGE_PCT) || 0)),
+  };
+  data = [...data].sort((a, b) => sortMap[sortBy](a) - sortMap[sortBy](b));
+
+  document.getElementById("universe-list").innerHTML =
+    data.map((s, i) => renderUniverseRow(s, i + 1)).join("") ||
+    "<p style='color:var(--text-dim);padding:20px'>No stocks found</p>";
+}
+
+// ─── MAIN LOAD ───────────────────────────────────────────────────
+
+async function loadData() {
+  if (isLoading) return;
+  isLoading = true;
+  document.getElementById("refresh-btn").classList.add("spinning");
+
+  try {
+    const data = await fetchSheetData();
+    renderAll(data);
+    // Cache in localStorage for offline fallback
+    try { localStorage.setItem("fo_data", JSON.stringify(data)); } catch {}
+  } catch (err) {
+    // Try offline cache
+    try {
+      const cached = localStorage.getItem("fo_data");
+      if (cached) {
+        const data = JSON.parse(cached);
+        data.last_updated += " (cached)";
+        renderAll(data);
+        document.getElementById("offline-banner").classList.add("show");
+        return;
+      }
+    } catch {}
+    // Show error
+    document.getElementById("home-loading").innerHTML = `
+      <div class="error-card">
+        <h3>⚠️ Could not load data</h3>
+        <p>Check your internet connection or Google Sheet configuration.<br><br>Error: ${err.message}</p>
+      </div>`;
+    document.getElementById("longs-loading").innerHTML =
+      document.getElementById("shorts-loading").innerHTML = document.getElementById("home-loading").innerHTML;
+  } finally {
+    isLoading = false;
+    document.getElementById("refresh-btn").classList.remove("spinning");
+  }
+}
+
+// ─── EVENT LISTENERS ─────────────────────────────────────────────
+
+// Tab switching
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(`tab-${tab}`).classList.add("active");
+  });
+});
+
+// Universe search + sort
+document.getElementById("universe-search").addEventListener("input", e => {
+  renderUniverse(e.target.value, document.getElementById("universe-sort").value);
+});
+document.getElementById("universe-sort").addEventListener("change", e => {
+  renderUniverse(document.getElementById("universe-search").value, e.target.value);
+});
+
+// Refresh button
+document.getElementById("refresh-btn").addEventListener("click", loadData);
+
+// Online / offline detection
+window.addEventListener("offline", () => document.getElementById("offline-banner").classList.add("show"));
+window.addEventListener("online",  () => { document.getElementById("offline-banner").classList.remove("show"); loadData(); });
+
+// PWA Install prompt
+window.addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  document.getElementById("install-banner").classList.remove("hidden");
+});
+document.getElementById("install-btn").addEventListener("click", async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const { outcome } = await deferredPrompt.userChoice;
+  deferredPrompt = null;
+  document.getElementById("install-banner").classList.add("hidden");
+});
+
+// Service Worker registration
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then(() => {
+    navigator.serviceWorker.addEventListener("message", e => {
+      if (e.data?.type === "REFRESH_DATA") loadData();
+    });
+  }).catch(err => console.warn("SW registration failed:", err));
+}
+
+// Hash navigation (shortcuts)
+function handleHash() {
+  const tab = location.hash.replace("#", "");
+  if (tab && document.querySelector(`[data-tab="${tab}"]`)) {
+    document.querySelector(`[data-tab="${tab}"]`).click();
+  }
+}
+window.addEventListener("hashchange", handleHash);
+handleHash();
+
+// Auto-refresh every 5 minutes
+setInterval(() => { if (document.visibilityState === "visible") loadData(); }, 5 * 60 * 1000);
+
+// Initial load
+loadData();
+</script>
+</body>
+</html>
