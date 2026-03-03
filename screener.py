@@ -185,102 +185,71 @@ def download_participant_oi(trade_date: date, session: requests.Session) -> pd.D
 # ─────────────────────────────────────────────
 
 def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
-    """UDiFF format: STF=Stock Futures, TCKRSYMB, XPRYDT, STTLMPRIC, OPNINTRST"""
-    logger.info(f"F&O Bhavcopy columns: {list(df.columns)}")
-
-    # Find instrument type column
-    inst_col = None
-    for c in df.columns:
-        if c.upper().strip() in ("FININSTRMTP", "INSTRUMENT", "INSTTYPE"):
-            inst_col = c
-            break
-    if inst_col is None:
-        logger.warning("No instrument type column found!")
-        return pd.DataFrame()
-
-    inst_series = df[inst_col].astype(str).str.strip().str.upper()
-    logger.info(f"Unique instrument types: {inst_series.unique()}")
-    fut = df[inst_series.isin({"STF", "FUTSTK"})].copy().reset_index(drop=True)
+    """
+    Extract FUTSTK current-month contracts from F&O bhavcopy.
+    Returns per-stock: OI, prev OI, close price, prev close.
+    """
+    # Filter for stock futures only
+    fut = df[df.get("INSTRUMENT", df.get("INSTTYPE", pd.Series())).str.strip() == "FUTSTK"].copy()
     if fut.empty:
-        logger.warning("No stock futures rows found!")
-        return pd.DataFrame()
-    logger.info(f"Stock futures rows: {len(fut)}")
+        # Try alternate column names
+        for col in df.columns:
+            if "INST" in col:
+                fut = df[df[col].str.strip() == "FUTSTK"].copy()
+                if not fut.empty:
+                    break
 
-    # Pick ONE column per field by priority
-    def find_col(candidates):
-        for name in candidates:
-            if name in fut.columns:
-                return name
-        return None
-
-    sym_col    = find_col(["TCKRSYMB", "SYMBOL", "SYMBOLNAME"])
-    expiry_col = find_col(["XPRYDT", "EXPIRY_DT", "EXPDATE"])
-    close_col  = find_col(["STTLMPRIC", "CLSPRIC", "LASTPRIC", "CLOSE", "SETTLE_PR"])
-    prev_col   = find_col(["PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE"])
-    oi_col     = find_col(["OPNINTRST", "OPEN_INT", "OPENINT", "OI"])
-    oi_chg_col = find_col(["CHNGINOPNINTRST", "CHG_IN_OI", "CHNG_IN_OI"])
-
-    if not sym_col or not close_col or not oi_col:
-        logger.warning(f"Missing critical columns. sym={sym_col}, close={close_col}, oi={oi_col}")
+    if fut.empty:
+        logger.warning("No FUTSTK rows found in F&O bhavcopy!")
         return pd.DataFrame()
 
-    # Build clean single-column dataframe — no duplicate column names
-    cols = {sym_col: "SYMBOL", close_col: "CLOSE", oi_col: "OI"}
-    if expiry_col: cols[expiry_col] = "EXPIRY_DT"
-    if prev_col:   cols[prev_col]   = "PREV_CLOSE"
-    if oi_chg_col: cols[oi_chg_col] = "OI_CHANGE_ABS"
+    # Standardise column names
+    col_map = {}
+    for c in fut.columns:
+        cu = c.upper().strip()
+        if "SYMBOL" in cu:
+            col_map[c] = "SYMBOL"
+        elif "EXPIRY" in cu or "EXPDT" in cu:
+            col_map[c] = "EXPIRY_DT"
+        elif cu in ("CLOSE", "SETTLE_PR", "SETTLPR", "CLOSE_PR"):
+            col_map[c] = "CLOSE"
+        elif cu in ("PREVCLOSE", "PREV_CLOSE", "PREV_CLS"):
+            col_map[c] = "PREV_CLOSE"
+        elif cu in ("OPEN_INT", "OPENINT", "OI"):
+            col_map[c] = "OI"
+        elif cu in ("CHG_IN_OI", "OI_CHANGE", "CHNG_IN_OI"):
+            col_map[c] = "OI_CHANGE_ABS"
+    fut = fut.rename(columns=col_map)
 
-    fut2 = fut[list(cols.keys())].copy().rename(columns=cols)
+    # Parse expiry dates and pick current month
+    fut["EXPIRY_DT"] = pd.to_datetime(fut["EXPIRY_DT"], dayfirst=True, errors="coerce")
+    current_month = pd.Timestamp(trade_date).replace(day=1)
+    next_month = (current_month + pd.DateOffset(months=1))
+    current_contracts = fut[
+        (fut["EXPIRY_DT"] >= current_month) & (fut["EXPIRY_DT"] < next_month)
+    ]
+    if current_contracts.empty:
+        # Fallback: use nearest expiry
+        fut_sorted = fut.sort_values("EXPIRY_DT")
+        nearest = fut_sorted["EXPIRY_DT"].dropna().min()
+        current_contracts = fut[fut["EXPIRY_DT"] == nearest]
 
-    for num_col in ("CLOSE", "OI", "OI_CHANGE_ABS", "PREV_CLOSE"):
-        if num_col in fut2.columns:
-            fut2[num_col] = pd.to_numeric(fut2[num_col], errors="coerce")
+    # Aggregate (multiple strikes shouldn't exist for FUTSTK but just in case)
+    agg = current_contracts.groupby("SYMBOL").agg(
+        FO_CLOSE=("CLOSE", "last"),
+        OI=("OI", "sum"),
+    ).reset_index()
 
-    if "EXPIRY_DT" in fut2.columns:
-        fut2["EXPIRY_DT"] = pd.to_datetime(fut2["EXPIRY_DT"], errors="coerce")
-        cm = pd.Timestamp(trade_date).replace(day=1)
-        nm = cm + pd.DateOffset(months=1)
-        cc = fut2[(fut2["EXPIRY_DT"] >= cm) & (fut2["EXPIRY_DT"] < nm)].copy()
-        if cc.empty:
-            nearest = fut2["EXPIRY_DT"].dropna().min()
-            cc = fut2[fut2["EXPIRY_DT"] == nearest].copy()
-    else:
-        cc = fut2.copy()
-
-    if cc.empty:
-        logger.warning("No contracts after expiry filter!")
-        return pd.DataFrame()
-
-    agg = cc.groupby("SYMBOL").agg(FO_CLOSE=("CLOSE", "last"), OI=("OI", "sum")).reset_index()
-
-    if "PREV_CLOSE" in cc.columns:
-        agg = agg.merge(cc.groupby("SYMBOL").agg(FO_PREV_CLOSE=("PREV_CLOSE", "last")).reset_index(), on="SYMBOL", how="left")
-
-    if "OI_CHANGE_ABS" in cc.columns:
-        agg = agg.merge(cc.groupby("SYMBOL").agg(OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum")).reset_index(), on="SYMBOL", how="left")
-        agg["OI_PREV"] = agg["OI"] - agg["OI_CHANGE_ABS"]
-    else:
-        agg["OI_PREV"] = np.nan
-        agg["OI_CHANGE_ABS"] = np.nan
-
-    agg["OI_CHANGE_PCT"] = np.where(
-        agg["OI_PREV"].notna() & (agg["OI_PREV"] != 0),
-        ((agg["OI"] - agg["OI_PREV"]) / agg["OI_PREV"]) * 100, np.nan)
-
-    logger.info(f"Parsed {len(agg)} stocks from F&O bhavcopy")
-    return agg
-
-    agg = current_contracts.groupby("SYMBOL").agg(**agg_dict).reset_index()
-
+    # Compute prev OI and prev close if available
     if "PREV_CLOSE" in current_contracts.columns:
         prev = current_contracts.groupby("SYMBOL").agg(
-            FO_PREV_CLOSE=("PREV_CLOSE", "last")
+            FO_PREV_CLOSE=("PREV_CLOSE", "last"),
         ).reset_index()
         agg = agg.merge(prev, on="SYMBOL", how="left")
 
     if "OI_CHANGE_ABS" in current_contracts.columns:
         oi_chg = current_contracts.groupby("SYMBOL").agg(
-            OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum")
+            OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum"),
         ).reset_index()
         agg = agg.merge(oi_chg, on="SYMBOL", how="left")
         agg["OI_PREV"] = agg["OI"] - agg["OI_CHANGE_ABS"]
@@ -294,38 +263,43 @@ def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         np.nan,
     )
 
-    logger.info(f"Parsed {len(agg)} stocks from F&O bhavcopy")
     return agg
 
 
 def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Extract equity close, prev close, and delivery % from CM bhavcopy.
-    UDiFF format: TCKRSYMB, SCTYSRS, CLSPRIC, PRVSCLSGPRIC, etc.
+    """Extract equity close, prev close, and delivery % from CM bhavcopy.
+    UDiFF format: TCKRSYMB, SCTYSRS, CLSPRIC, PRVSCLSGPRIC, TTLTRADGVOL, DLVRYQTY
+    Uses find_col to pick ONE column per field — avoids duplicate column name errors.
     """
     logger.info(f"CM Bhavcopy columns: {list(df.columns)}")
 
-    col_map = {}
-    for c in df.columns:
-        cu = c.upper().strip()
-        if cu in ("TCKRSYMB", "SYMBOL", "SYMBOLNAME"):
-            col_map[c] = "SYMBOL"
-        elif cu in ("SCTYSRS", "SRIESSRS", "SERIES"):
-            col_map[c] = "SERIES"
-        elif cu == "STTLMPRIC":
-            col_map[c] = "CM_CLOSE"
-        elif cu in ("CLSPRIC", "LASTPRIC") and "CM_CLOSE" not in col_map.values():
-            col_map[c] = "CM_CLOSE"
-        elif cu in ("PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE"):
-            col_map[c] = "CM_PREV_CLOSE"
-        elif cu in ("DLVRYQTYPCTGOFTRADGQTY", "DELIV_PER", "DELIVERY_PCT"):
-            col_map[c] = "DELIVERY_PCT"
-        elif cu in ("DLVRYQTY", "DELIVERYQTY", "DELIV_QTY"):
-            col_map[c] = "DELIVERY_QTY"
-        elif cu in ("TTLTRADGVOL", "TTL_TRD_QNTY", "TOTTRDQTY"):
-            col_map[c] = "TOTAL_QTY"
+    def find_col(candidates):
+        for name in candidates:
+            if name in df.columns:
+                return name
+        return None
 
-    df2 = df.rename(columns=col_map)
+    sym_col    = find_col(["TCKRSYMB", "SYMBOL", "SYMBOLNAME"])
+    series_col = find_col(["SCTYSRS", "SERIES", "SRIESSRS"])
+    close_col  = find_col(["CLSPRIC", "LASTPRIC", "STTLMPRIC", "CLOSE", "CLOSE_PRICE"])
+    prev_col   = find_col(["PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE", "PREV_CLS"])
+    deliv_pct  = find_col(["DLVRYQTYPCTGOFTRADGQTY", "DELIVERY_PCT", "DELIV_PER"])
+    deliv_qty  = find_col(["DLVRYQTY", "DELIVERYQTY", "DELIV_QTY"])
+    total_qty  = find_col(["TTLTRADGVOL", "TTL_TRD_QNTY", "TOTTRDQTY", "TOT_TRD_QTY"])
+
+    if not sym_col or not close_col:
+        logger.warning(f"Missing critical CM columns. sym={sym_col}, close={close_col}")
+        return pd.DataFrame()
+
+    # Build clean dataframe — one column per field, no duplicates
+    cols = {sym_col: "SYMBOL", close_col: "CM_CLOSE"}
+    if series_col: cols[series_col] = "SERIES"
+    if prev_col:   cols[prev_col]   = "CM_PREV_CLOSE"
+    if deliv_pct:  cols[deliv_pct]  = "DELIVERY_PCT"
+    if deliv_qty:  cols[deliv_qty]  = "DELIVERY_QTY"
+    if total_qty:  cols[total_qty]  = "TOTAL_QTY"
+
+    df2 = df[list(cols.keys())].copy().rename(columns=cols)
 
     # Keep EQ series only
     if "SERIES" in df2.columns:
@@ -335,24 +309,19 @@ def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
     if "DELIVERY_PCT" not in df2.columns:
         if "DELIVERY_QTY" in df2.columns and "TOTAL_QTY" in df2.columns:
             df2["DELIVERY_PCT"] = (
-                pd.to_numeric(df2["DELIVERY_QTY"].astype(str), errors="coerce") /
-                pd.to_numeric(df2["TOTAL_QTY"].astype(str), errors="coerce") * 100
+                pd.to_numeric(df2["DELIVERY_QTY"], errors="coerce") /
+                pd.to_numeric(df2["TOTAL_QTY"], errors="coerce") * 100
             )
 
-    # Convert numeric columns
     for num_col in ("CM_CLOSE", "CM_PREV_CLOSE", "DELIVERY_PCT"):
         if num_col in df2.columns:
-            df2[num_col] = pd.to_numeric(df2[num_col].astype(str), errors="coerce")
+            df2[num_col] = pd.to_numeric(df2[num_col], errors="coerce")
 
     keep = ["SYMBOL", "CM_CLOSE", "CM_PREV_CLOSE", "DELIVERY_PCT"]
     existing = [c for c in keep if c in df2.columns]
-    df2 = df2[existing].copy()
+    df2 = df2[existing].drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
 
-    # Deduplicate — UDiFF may have multiple session rows per symbol
-    if "SYMBOL" in df2.columns:
-        df2 = df2.drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
-
-    logger.info(f"CM bhavcopy parsed: {len(df2)} EQ rows, columns: {existing}")
+    logger.info(f"CM parsed: {len(df2)} EQ rows, columns: {existing}")
     return df2
 
 
@@ -921,18 +890,9 @@ def run_screener(trade_date: date = None) -> dict:
     cm_data = parse_cm_bhavcopy(cm_raw) if cm_raw is not None else pd.DataFrame()
     macro   = parse_participant_oi(poi_raw) if poi_raw is not None else {}
 
-    # Create lookup dicts — deduplicate first to avoid index errors
-    if not fo_data.empty and "SYMBOL" in fo_data.columns:
-        fo_data = fo_data.drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
-        fo_lookup = fo_data.set_index("SYMBOL").to_dict(orient="index")
-    else:
-        fo_lookup = {}
-
-    if not cm_data.empty and "SYMBOL" in cm_data.columns:
-        cm_data = cm_data.drop_duplicates(subset="SYMBOL", keep="last").reset_index(drop=True)
-        cm_lookup = cm_data.set_index("SYMBOL").to_dict(orient="index")
-    else:
-        cm_lookup = {}
+    # Create lookup dicts
+    fo_lookup = fo_data.set_index("SYMBOL").to_dict(orient="index") if not fo_data.empty else {}
+    cm_lookup = cm_data.set_index("SYMBOL").to_dict(orient="index") if not cm_data.empty else {}
 
     # ── Step 3: Fetch OHLCV data ─────────────────────
     logger.info(f"STEP 3: Fetching OHLCV for {len(FO_STOCKS)} stocks via yfinance...")
