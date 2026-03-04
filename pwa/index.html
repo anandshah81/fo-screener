@@ -420,22 +420,21 @@
 <script>
 // ─── CONFIG ─────────────────────────────────────────────────────
 // IMPORTANT: Replace with your actual Google Sheet ID and sheet GID values
-const SHEET_ID = "https://docs.google.com/spreadsheets/d/1P9owULYqmqBcvlzbQnUoCA3qBaJYviIVj25gaHx9Dsg/edit"; // ← Replace this
+const SHEET_ID = "1P9owULYqmqBcvlzbQnUoCA3qBaJYviIVj25gaHx9Dsg";
 
 // Google Sheets public CSV export URLs per tab
-// Make sure the sheet is shared as "Anyone with link can view"
+// Sheet is shared as "Anyone with link can view"
 function sheetCsvUrl(gid) {
   return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
 }
 
-// Tab GIDs (find these in the Google Sheet URL when you click each tab)
-// Format: &gid=XXXXXXXX
+// Tab GIDs from Google Sheet URL
 const TAB_GIDS = {
-  morning_brief: "0",          // First tab is usually 0
-  top_longs:     "1",          // Update after creating sheet
-  top_shorts:    "2",
-  oi_alerts:     "3",
-  full_universe: "4",
+  morning_brief: "805186472",
+  top_longs:     "2059154994",
+  top_shorts:    "1932997497",
+  oi_alerts:     "518132719",
+  full_universe: "1749352389",
 };
 
 // ─── STATE ──────────────────────────────────────────────────────
