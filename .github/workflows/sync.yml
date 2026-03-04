@@ -1,0 +1,61 @@
+name: Sync F&O Universe
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Trade date YYYY-MM-DD (optional, defaults to last trading day)'
+        required: false
+        default: ''
+      auto_update:
+        description: 'Auto-update config.py? (yes/no)'
+        required: false
+        default: 'no'
+
+jobs:
+  sync-universe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ── 1. Checkout code ───────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ──────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. Install dependencies ───────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas
+
+      # ── 4. Run sync ───────────────────────────────
+      - name: Sync F&O Universe
+        run: |
+          DATE_ARG=""
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            DATE_ARG="--date ${{ github.event.inputs.date }}"
+          fi
+
+          UPDATE_ARG=""
+          if [ "${{ github.event.inputs.auto_update }}" = "yes" ]; then
+            UPDATE_ARG="--update"
+          fi
+
+          python sync_fo_universe.py $DATE_ARG $UPDATE_ARG
+
+      # ── 5. Commit updated config.py if changed ────
+      - name: Commit config.py if updated
+        if: github.event.inputs.auto_update == 'yes'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add config.py
+          git diff --staged --quiet || git commit -m "auto-sync F&O universe $(date +%Y-%m-%d)"
+          git push
