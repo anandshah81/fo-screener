@@ -1199,21 +1199,37 @@ def run_screener(trade_date: date = None) -> dict:
     logger.info("-" * 60)
     logger.info("TOP 10 LONG CANDIDATES:")
     for _, row in top_longs.iterrows():
+        bb  = row.get("BB_SIGNAL", "N/A")
+        bo  = row.get("BREAKOUT_SIGNAL", "N/A")
+        sq  = " [SQZ]" if row.get("BB_SQUEEZE") else ""
         logger.info(
             f"  {row['SYMBOL']:<15} Score={row['COMPOSITE_SCORE']:+4d} "
             f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d}) "
-            f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A')}"
+            f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A'):<18} "
+            f"| BB:{bb}{sq} | BO:{bo}"
         )
     logger.info("-" * 60)
     logger.info("TOP 10 SHORT CANDIDATES:")
     for _, row in top_shorts.iterrows():
+        bb  = row.get("BB_SIGNAL", "N/A")
+        bo  = row.get("BREAKOUT_SIGNAL", "N/A")
+        sq  = " [SQZ]" if row.get("BB_SQUEEZE") else ""
         logger.info(
             f"  {row['SYMBOL']:<15} Score={row['COMPOSITE_SCORE']:+4d} "
             f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d}) "
-            f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A')}"
+            f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A'):<18} "
+            f"| BB:{bb}{sq} | BO:{bo}"
         )
     logger.info("-" * 60)
     logger.info(f"OI ALERTS: {len(oi_alerts)} stocks with OI change >{OI_ALERT_THRESHOLD}%")
+    if not oi_alerts.empty:
+        for _, row in oi_alerts.head(10).iterrows():
+            severity = row.get("ALERT_SEVERITY", "")
+            label    = row.get("ALERT_LABEL", "")
+            logger.info(
+                f"  {row['SYMBOL']:<15} OI%={row['OI_CHANGE_PCT']:+.1f}% "
+                f"| {severity:<8} | {label}"
+            )
     logger.info("=" * 60)
 
     return {
