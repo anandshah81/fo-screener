@@ -28,6 +28,7 @@ try:
 except ImportError:
     ta = None
 
+from sector_map import SECTOR_MAP
 from config import (
     FO_STOCKS, NSE_MONTH_ABBR, NSE_HOLIDAYS,
     NSE_FO_BHAVCOPY_URL, NSE_CM_BHAVCOPY_URL, NSE_PARTICIPANT_OI_URL,
@@ -1100,6 +1101,52 @@ def calculate_fo_score(fo_row: pd.Series, cm_row: pd.Series, pcr_val: float = No
 # COMPOSITE SCORING & CLASSIFICATION
 # ─────────────────────────────────────────────
 
+def compute_sector_summary(df_results: pd.DataFrame) -> pd.DataFrame:
+    """
+    Group stocks by sector and compute:
+    - Count of Long / Short / Neutral signals
+    - Average composite score
+    - Sector bias label (BULLISH / BEARISH / MIXED / NEUTRAL)
+    """
+    df = df_results.copy()
+    df["SECTOR"] = df["SYMBOL"].map(SECTOR_MAP).fillna("OTHERS")
+
+    rows = []
+    for sector, grp in df.groupby("SECTOR"):
+        total   = len(grp)
+        longs   = int((grp["COMPOSITE_SCORE"] >= LONG_THRESHOLD).sum())
+        shorts  = int((grp["COMPOSITE_SCORE"] <= SHORT_THRESHOLD).sum())
+        neutral = total - longs - shorts
+        avg     = round(grp["COMPOSITE_SCORE"].mean(), 1)
+
+        long_pct  = longs  / total if total > 0 else 0
+        short_pct = shorts / total if total > 0 else 0
+
+        if long_pct >= 0.5:
+            bias = "BULLISH"
+        elif short_pct >= 0.5:
+            bias = "BEARISH"
+        elif long_pct > short_pct and long_pct >= 0.3:
+            bias = "MILD BULLISH"
+        elif short_pct > long_pct and short_pct >= 0.3:
+            bias = "MILD BEARISH"
+        else:
+            bias = "NEUTRAL"
+
+        rows.append({
+            "SECTOR":    sector,
+            "TOTAL":     total,
+            "LONGS":     longs,
+            "SHORTS":    shorts,
+            "NEUTRAL":   neutral,
+            "AVG_SCORE": avg,
+            "BIAS":      bias,
+        })
+
+    sector_df = pd.DataFrame(rows).sort_values("AVG_SCORE", ascending=False)
+    return sector_df
+
+
 def classify_signal(composite_score: float) -> str:
     if composite_score >= STRONG_LONG_THRESHOLD:
         return "STRONG LONG"
@@ -1243,9 +1290,11 @@ def run_screener(trade_date: date = None) -> dict:
     df_results = pd.DataFrame(results)
     df_results = df_results.sort_values("COMPOSITE_SCORE", ascending=False).reset_index(drop=True)
     df_results["RANK"] = df_results.index + 1
+    df_results["SECTOR"] = df_results["SYMBOL"].map(SECTOR_MAP).fillna("OTHERS")
 
-    top_longs  = df_results[df_results["COMPOSITE_SCORE"] >= LONG_THRESHOLD].head(10)
-    top_shorts = df_results[df_results["COMPOSITE_SCORE"] <= SHORT_THRESHOLD].tail(10).iloc[::-1]
+    top_longs    = df_results[df_results["COMPOSITE_SCORE"] >= LONG_THRESHOLD].head(10)
+    top_shorts   = df_results[df_results["COMPOSITE_SCORE"] <= SHORT_THRESHOLD].tail(10).iloc[::-1]
+    sector_summary = compute_sector_summary(df_results)
     oi_alerts  = df_results[
         df_results["OI_CHANGE_PCT"].notna() &
         (df_results["OI_CHANGE_PCT"].abs() >= OI_ALERT_THRESHOLD)
@@ -1340,6 +1389,16 @@ def run_screener(trade_date: date = None) -> dict:
                 f"  {row['SYMBOL']:<15} OI%={row['OI_CHANGE_PCT']:+.1f}% "
                 f"| {severity:<8} | {label}"
             )
+    logger.info("-" * 60)
+    logger.info("SECTOR SUMMARY:")
+    for _, row in sector_summary.iterrows():
+        bar_l = "▲" * row["LONGS"]
+        bar_s = "▼" * row["SHORTS"]
+        logger.info(
+            f"  {row['SECTOR']:<18} Avg={row['AVG_SCORE']:+5.1f} "
+            f"| L:{row['LONGS']:2d} S:{row['SHORTS']:2d} N:{row['NEUTRAL']:2d} "
+            f"| {row['BIAS']:<14} {bar_l}{bar_s}"
+        )
     logger.info("=" * 60)
 
     return {
@@ -1350,6 +1409,7 @@ def run_screener(trade_date: date = None) -> dict:
         "top_longs": top_longs,
         "top_shorts": top_shorts,
         "oi_alerts": oi_alerts,
+        "sector_summary": sector_summary,
     }
 
 
@@ -1384,6 +1444,7 @@ if __name__ == "__main__":
                 "top_longs": results["top_longs"].fillna("").to_dict(orient="records"),
                 "top_shorts": results["top_shorts"].fillna("").to_dict(orient="records"),
                 "oi_alerts": results["oi_alerts"].fillna("").to_dict(orient="records"),
+                "sector_summary": results["sector_summary"].fillna("").to_dict(orient="records"),
                 "full_universe": results["full_universe"].fillna("").to_dict(orient="records"),
             }
             json.dump(serializable, f, indent=2, default=str)
