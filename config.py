@@ -134,14 +134,19 @@ PCR_STRONG_BEAR  = 1.5    # PCR > 1.5  → put-heavy, bearish sentiment   → -2
 DELIVERY_HIGH = 60        # % delivery → institutional
 DELIVERY_LOW  = 20        # % delivery → speculative
 
+# Relative Strength vs Nifty — percentile rank of 20-day return vs universe
+RS_PERIOD      = 20   # days for return calculation
+RS_STRONG_BULL = 80   # percentile >= 80 → +2
+RS_MILD_BULL   = 60   # percentile >= 60 → +1
+RS_MILD_BEAR   = 40   # percentile <= 40 → -1
+RS_STRONG_BEAR = 20   # percentile <= 20 → -2
+
 # Composite score classification
-# Score range: +25 (max) to -24 (min) across 12 indicators (8 tech + 4 F&O incl. PCR)
-# Strong Long/Short = ~78% of max, requiring 7+ indicators aligned
-# Long/Short candidate = ~44% of max, requiring 4-5 indicators aligned
-STRONG_LONG_THRESHOLD  = 19
-LONG_THRESHOLD         = 11
-SHORT_THRESHOLD        = -11
-STRONG_SHORT_THRESHOLD = -19
+# Score range: +27 (max) to -26 (min) across 13 indicators (8 tech + 5 F&O incl. RS)
+STRONG_LONG_THRESHOLD  = 20
+LONG_THRESHOLD         = 12
+SHORT_THRESHOLD        = -12
+STRONG_SHORT_THRESHOLD = -20
 
 # ─────────────────────────────────────────────
 # YFINANCE SETTINGS

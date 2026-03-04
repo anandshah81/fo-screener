@@ -40,6 +40,7 @@ from config import (
     ADX_TREND_THRESHOLD, VOLUME_HIGH_RATIO, VOLUME_LOW_RATIO,
     OI_CHANGE_MEDIUM, OI_CHANGE_HIGH, OI_CHANGE_EXTREME, OI_ALERT_THRESHOLD,
     PCR_VERY_BULLISH, PCR_BULLISH, PCR_BEARISH, PCR_VERY_BEARISH,
+    RS_PERIOD, RS_STRONG_BULL, RS_MILD_BULL, RS_MILD_BEAR, RS_STRONG_BEAR,
     DELIVERY_HIGH, DELIVERY_LOW,
     STRONG_LONG_THRESHOLD, LONG_THRESHOLD, SHORT_THRESHOLD, STRONG_SHORT_THRESHOLD,
     YFINANCE_PERIOD, YFINANCE_INTERVAL, YFINANCE_SUFFIX,
@@ -1218,6 +1219,48 @@ def run_screener(trade_date: date = None) -> dict:
     ohlcv_data = fetch_ohlcv_batch(FO_STOCKS)
     logger.info(f"  Got data for {len(ohlcv_data)} stocks")
 
+    # ── Step 3b: Fetch Nifty and compute RS ranks ────
+    logger.info("Fetching Nifty50 for relative strength calculation...")
+    try:
+        import yfinance as yf
+        nifty_raw = yf.download("^NSEI", period=YFINANCE_PERIOD,
+                                interval=YFINANCE_INTERVAL, progress=False)
+        if isinstance(nifty_raw.columns, pd.MultiIndex):
+            nifty_raw.columns = nifty_raw.columns.get_level_values(0)
+        nifty_close = nifty_raw["Close"].dropna()
+        if len(nifty_close) >= RS_PERIOD + 1:
+            nifty_ret = (nifty_close.iloc[-1] / nifty_close.iloc[-(RS_PERIOD + 1)] - 1) * 100
+        else:
+            nifty_ret = 0.0
+        logger.info(f"  Nifty {RS_PERIOD}d return: {nifty_ret:.2f}%")
+    except Exception as e:
+        logger.warning(f"  Nifty fetch failed: {e} — RS scores will be 0")
+        nifty_ret = None
+
+    # Compute per-stock RS ratio vs Nifty and percentile rank
+    rs_ratios = {}
+    for symbol, ohlcv in ohlcv_data.items():
+        try:
+            close = ohlcv["Close"].dropna()
+            if len(close) >= RS_PERIOD + 1:
+                stock_ret = (close.iloc[-1] / close.iloc[-(RS_PERIOD + 1)] - 1) * 100
+                rs_ratios[symbol] = float(stock_ret)
+        except Exception:
+            pass
+
+    # Percentile rank within universe
+    rs_values = list(rs_ratios.values())
+    rs_pct_ranks = {}
+    if rs_values and nifty_ret is not None:
+        # Rank relative to universe (not Nifty directly) but subtract Nifty return first
+        rs_excess = {s: v - nifty_ret for s, v in rs_ratios.items()}
+        sorted_vals = sorted(rs_excess.values())
+        n = len(sorted_vals)
+        for sym, val in rs_excess.items():
+            rank = sorted_vals.index(val)
+            rs_pct_ranks[sym] = round((rank / (n - 1)) * 100, 1) if n > 1 else 50.0
+        logger.info(f"  RS percentile ranks computed for {len(rs_pct_ranks)} stocks")
+
     # ── Step 4: Score each stock ─────────────────────
     logger.info("STEP 4: Calculating scores...")
     results = []
@@ -1236,13 +1279,40 @@ def run_screener(trade_date: date = None) -> dict:
 
             tech_score = tech["technical_score"] if tech else 0
             fo_score   = fo["fo_score"]
-            composite  = tech_score + fo_score
+
+            # ── Relative Strength score ──────────────
+            rs_pct  = rs_pct_ranks.get(symbol)
+            if rs_pct is not None:
+                if rs_pct >= RS_STRONG_BULL:
+                    rs_score  = 2
+                    rs_signal = "TOP RS"
+                elif rs_pct >= RS_MILD_BULL:
+                    rs_score  = 1
+                    rs_signal = "ABOVE AVG RS"
+                elif rs_pct <= RS_STRONG_BEAR:
+                    rs_score  = -2
+                    rs_signal = "WEAK RS"
+                elif rs_pct <= RS_MILD_BEAR:
+                    rs_score  = -1
+                    rs_signal = "BELOW AVG RS"
+                else:
+                    rs_score  = 0
+                    rs_signal = "NEUTRAL RS"
+            else:
+                rs_score  = 0
+                rs_signal = "N/A"
+                rs_pct    = None
+
+            composite = tech_score + fo_score + rs_score
 
             row = {
                 "SYMBOL": symbol,
                 "COMPOSITE_SCORE": composite,
                 "TECHNICAL_SCORE": tech_score,
                 "FO_SCORE": fo_score,
+                "RS_SCORE": rs_score,
+                "RS_PCT": rs_pct,
+                "RS_SIGNAL": rs_signal,
                 "SIGNAL": classify_signal(composite),
                 "OI_SIGNAL": fo.get("oi_signal", "N/A"),
                 "OI_CHANGE_PCT": fo.get("oi_change_pct"),
@@ -1360,11 +1430,12 @@ def run_screener(trade_date: date = None) -> dict:
         bo  = row.get("BREAKOUT_SIGNAL", "N/A")
         sq  = " [SQZ]" if row.get("BB_SQUEEZE") else ""
         pcr = f"{row.get('PCR', 'N/A')}" if row.get("PCR") else "N/A"
+        rs  = f"{row.get('RS_SIGNAL','N/A')}({row.get('RS_PCT','?'):.0f}%)" if row.get("RS_PCT") is not None else "N/A"
         logger.info(
             f"  {row['SYMBOL']:<15} Score={row['COMPOSITE_SCORE']:+4d} "
-            f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d}) "
+            f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d} RS:{row.get('RS_SCORE',0):+2d}) "
             f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A'):<18} "
-            f"| BB:{bb}{sq} | BO:{bo} | PCR:{pcr}"
+            f"| BB:{bb}{sq} | BO:{bo} | PCR:{pcr} | RS:{rs}"
         )
     logger.info("-" * 60)
     logger.info("TOP 10 SHORT CANDIDATES:")
@@ -1373,11 +1444,12 @@ def run_screener(trade_date: date = None) -> dict:
         bo  = row.get("BREAKOUT_SIGNAL", "N/A")
         sq  = " [SQZ]" if row.get("BB_SQUEEZE") else ""
         pcr = f"{row.get('PCR', 'N/A')}" if row.get("PCR") else "N/A"
+        rs  = f"{row.get('RS_SIGNAL','N/A')}({row.get('RS_PCT','?'):.0f}%)" if row.get("RS_PCT") is not None else "N/A"
         logger.info(
             f"  {row['SYMBOL']:<15} Score={row['COMPOSITE_SCORE']:+4d} "
-            f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d}) "
+            f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d} RS:{row.get('RS_SCORE',0):+2d}) "
             f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A'):<18} "
-            f"| BB:{bb}{sq} | BO:{bo} | PCR:{pcr}"
+            f"| BB:{bb}{sq} | BO:{bo} | PCR:{pcr} | RS:{rs}"
         )
     logger.info("-" * 60)
     logger.info(f"OI ALERTS: {len(oi_alerts)} stocks with OI change >{OI_ALERT_THRESHOLD}%")
