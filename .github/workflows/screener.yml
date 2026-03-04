@@ -91,11 +91,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          DATE_ARG=""
           if [ -n "${{ github.event.inputs.date }}" ]; then
-            DATE_ARG="--date ${{ github.event.inputs.date }}"
+            DATE_STR=$(echo "${{ github.event.inputs.date }}" | tr -d '-')
+            python sheets_updater.py --json logs/screener_results_${DATE_STR}.json
+          else
+            python sheets_updater.py
           fi
-          python sheets_updater.py $DATE_ARG
         continue-on-error: false
 
       # ── 9. Send Telegram error if sheets failed ───
@@ -115,11 +116,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
         run: |
-          DATE_ARG=""
           if [ -n "${{ github.event.inputs.date }}" ]; then
-            DATE_ARG="--date ${{ github.event.inputs.date }}"
+            DATE_STR=$(echo "${{ github.event.inputs.date }}" | tr -d '-')
+            python telegram_alert.py --json logs/screener_results_${DATE_STR}.json
+          else
+            python telegram_alert.py
           fi
-          python telegram_alert.py $DATE_ARG
         continue-on-error: false
 
       # ── 11. Send Telegram error if message failed ─
