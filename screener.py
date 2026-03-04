@@ -186,72 +186,86 @@ def download_participant_oi(trade_date: date, session: requests.Session) -> pd.D
 
 def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     """
-    Extract FUTSTK current-month contracts from F&O bhavcopy.
-    Returns per-stock: OI, prev OI, close price, prev close.
+    Extract stock futures from F&O bhavcopy.
+    UDiFF format (post July 2024): STF=Stock Futures.
+    Uses find_col to pick ONE column per field — avoids duplicate column name errors.
     """
-    # Filter for stock futures only
-    fut = df[df.get("INSTRUMENT", df.get("INSTTYPE", pd.Series())).str.strip() == "FUTSTK"].copy()
-    if fut.empty:
-        # Try alternate column names
-        for col in df.columns:
-            if "INST" in col:
-                fut = df[df[col].str.strip() == "FUTSTK"].copy()
-                if not fut.empty:
-                    break
+    logger.info(f"F&O Bhavcopy columns: {list(df.columns)}")
 
-    if fut.empty:
-        logger.warning("No FUTSTK rows found in F&O bhavcopy!")
+    # Find instrument type column
+    inst_col = None
+    for c in df.columns:
+        if c.upper().strip() in ("FININSTRMTP", "INSTRUMENT", "INSTTYPE"):
+            inst_col = c
+            break
+    if inst_col is None:
+        logger.warning("No instrument type column found!")
         return pd.DataFrame()
 
-    # Standardise column names
-    col_map = {}
-    for c in fut.columns:
-        cu = c.upper().strip()
-        if "SYMBOL" in cu:
-            col_map[c] = "SYMBOL"
-        elif "EXPIRY" in cu or "EXPDT" in cu:
-            col_map[c] = "EXPIRY_DT"
-        elif cu in ("CLOSE", "SETTLE_PR", "SETTLPR", "CLOSE_PR"):
-            col_map[c] = "CLOSE"
-        elif cu in ("PREVCLOSE", "PREV_CLOSE", "PREV_CLS"):
-            col_map[c] = "PREV_CLOSE"
-        elif cu in ("OPEN_INT", "OPENINT", "OI"):
-            col_map[c] = "OI"
-        elif cu in ("CHG_IN_OI", "OI_CHANGE", "CHNG_IN_OI"):
-            col_map[c] = "OI_CHANGE_ABS"
-    fut = fut.rename(columns=col_map)
+    inst_series = df[inst_col].astype(str).str.strip().str.upper()
+    logger.info(f"Unique instrument types: {inst_series.unique()}")
+    fut = df[inst_series.isin({"STF", "FUTSTK"})].copy().reset_index(drop=True)
+    if fut.empty:
+        logger.warning("No stock futures rows found!")
+        return pd.DataFrame()
+    logger.info(f"Stock futures rows: {len(fut)}")
 
-    # Parse expiry dates and pick current month
-    fut["EXPIRY_DT"] = pd.to_datetime(fut["EXPIRY_DT"], dayfirst=True, errors="coerce")
-    current_month = pd.Timestamp(trade_date).replace(day=1)
-    next_month = (current_month + pd.DateOffset(months=1))
-    current_contracts = fut[
-        (fut["EXPIRY_DT"] >= current_month) & (fut["EXPIRY_DT"] < next_month)
-    ]
-    if current_contracts.empty:
-        # Fallback: use nearest expiry
-        fut_sorted = fut.sort_values("EXPIRY_DT")
-        nearest = fut_sorted["EXPIRY_DT"].dropna().min()
-        current_contracts = fut[fut["EXPIRY_DT"] == nearest]
+    # Pick ONE column per field by priority — no duplicate column names
+    def find_col(candidates):
+        for name in candidates:
+            if name in fut.columns:
+                return name
+        return None
 
-    # Aggregate (multiple strikes shouldn't exist for FUTSTK but just in case)
-    agg = current_contracts.groupby("SYMBOL").agg(
-        FO_CLOSE=("CLOSE", "last"),
-        OI=("OI", "sum"),
-    ).reset_index()
+    sym_col    = find_col(["TCKRSYMB", "SYMBOL", "SYMBOLNAME"])
+    expiry_col = find_col(["XPRYDT", "EXPIRY_DT", "EXPDATE"])
+    close_col  = find_col(["STTLMPRIC", "CLSPRIC", "LASTPRIC", "CLOSE", "SETTLE_PR"])
+    prev_col   = find_col(["PRVSCLSGPRIC", "PREVCLOSE", "PREV_CLOSE"])
+    oi_col     = find_col(["OPNINTRST", "OPEN_INT", "OPENINT", "OI"])
+    oi_chg_col = find_col(["CHNGINOPNINTRST", "CHG_IN_OI", "CHNG_IN_OI"])
 
-    # Compute prev OI and prev close if available
-    if "PREV_CLOSE" in current_contracts.columns:
-        prev = current_contracts.groupby("SYMBOL").agg(
-            FO_PREV_CLOSE=("PREV_CLOSE", "last"),
-        ).reset_index()
-        agg = agg.merge(prev, on="SYMBOL", how="left")
+    if not sym_col or not close_col or not oi_col:
+        logger.warning(f"Missing critical columns. sym={sym_col}, close={close_col}, oi={oi_col}")
+        return pd.DataFrame()
 
-    if "OI_CHANGE_ABS" in current_contracts.columns:
-        oi_chg = current_contracts.groupby("SYMBOL").agg(
-            OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum"),
-        ).reset_index()
-        agg = agg.merge(oi_chg, on="SYMBOL", how="left")
+    cols = {sym_col: "SYMBOL", close_col: "CLOSE", oi_col: "OI"}
+    if expiry_col: cols[expiry_col] = "EXPIRY_DT"
+    if prev_col:   cols[prev_col]   = "PREV_CLOSE"
+    if oi_chg_col: cols[oi_chg_col] = "OI_CHANGE_ABS"
+
+    fut2 = fut[list(cols.keys())].copy().rename(columns=cols)
+
+    for num_col in ("CLOSE", "OI", "OI_CHANGE_ABS", "PREV_CLOSE"):
+        if num_col in fut2.columns:
+            fut2[num_col] = pd.to_numeric(fut2[num_col], errors="coerce")
+
+    if "EXPIRY_DT" in fut2.columns:
+        fut2["EXPIRY_DT"] = pd.to_datetime(fut2["EXPIRY_DT"], errors="coerce")
+        cm = pd.Timestamp(trade_date).replace(day=1)
+        nm = cm + pd.DateOffset(months=1)
+        cc = fut2[(fut2["EXPIRY_DT"] >= cm) & (fut2["EXPIRY_DT"] < nm)].copy()
+        if cc.empty:
+            nearest = fut2["EXPIRY_DT"].dropna().min()
+            cc = fut2[fut2["EXPIRY_DT"] == nearest].copy()
+            logger.info(f"Fallback to nearest expiry: {nearest}")
+    else:
+        cc = fut2.copy()
+
+    if cc.empty:
+        logger.warning("No contracts after expiry filter!")
+        return pd.DataFrame()
+
+    agg = cc.groupby("SYMBOL").agg(FO_CLOSE=("CLOSE", "last"), OI=("OI", "sum")).reset_index()
+
+    if "PREV_CLOSE" in cc.columns:
+        agg = agg.merge(
+            cc.groupby("SYMBOL").agg(FO_PREV_CLOSE=("PREV_CLOSE", "last")).reset_index(),
+            on="SYMBOL", how="left")
+
+    if "OI_CHANGE_ABS" in cc.columns:
+        agg = agg.merge(
+            cc.groupby("SYMBOL").agg(OI_CHANGE_ABS=("OI_CHANGE_ABS", "sum")).reset_index(),
+            on="SYMBOL", how="left")
         agg["OI_PREV"] = agg["OI"] - agg["OI_CHANGE_ABS"]
     else:
         agg["OI_PREV"] = np.nan
@@ -263,12 +277,14 @@ def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         np.nan,
     )
 
+    logger.info(f"Parsed {len(agg)} stocks from F&O bhavcopy")
     return agg
 
 
 def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
-    """Extract equity close, prev close, and delivery % from CM bhavcopy.
-    UDiFF format: TCKRSYMB, SCTYSRS, CLSPRIC, PRVSCLSGPRIC, TTLTRADGVOL, DLVRYQTY
+    """
+    Extract equity close, prev close, and delivery % from CM bhavcopy.
+    UDiFF format: TCKRSYMB, SCTYSRS, CLSPRIC, PRVSCLSGPRIC, TTLTRADGVOL, DLVRYQTY.
     Uses find_col to pick ONE column per field — avoids duplicate column name errors.
     """
     logger.info(f"CM Bhavcopy columns: {list(df.columns)}")
@@ -291,7 +307,6 @@ def parse_cm_bhavcopy(df: pd.DataFrame) -> pd.DataFrame:
         logger.warning(f"Missing critical CM columns. sym={sym_col}, close={close_col}")
         return pd.DataFrame()
 
-    # Build clean dataframe — one column per field, no duplicates
     cols = {sym_col: "SYMBOL", close_col: "CM_CLOSE"}
     if series_col: cols[series_col] = "SERIES"
     if prev_col:   cols[prev_col]   = "CM_PREV_CLOSE"
