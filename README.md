@@ -2,7 +2,7 @@
 
 A fully automated equity screener for the NSE Futures & Options universe, built for systematic pre-market preparation.
 
-The screener downloads live NSE bhavcopy data every morning, scores all 206 F&O stocks across 8 technical and 3 F&O-specific indicators, and produces a ranked output of long and short candidates — ready before market open.
+The screener downloads live NSE bhavcopy data every morning, scores all 206 F&O stocks across 12 indicators, and produces a ranked output of long and short candidates — ready before market open.
 
 ---
 
@@ -10,7 +10,7 @@ The screener downloads live NSE bhavcopy data every morning, scores all 206 F&O 
 
 - Downloads live NSE F&O and CM bhavcopy files daily
 - Fetches 1-year OHLCV history for all 206 F&O stocks via yfinance
-- Scores each stock across 11 indicators into a composite score
+- Scores each stock across 12 indicators into a composite score
 - Ranks the full universe and flags top long/short candidates and OI alerts
 - Saves output as CSV and JSON to the `logs/` folder
 - Runs automatically via GitHub Actions — no manual intervention needed
@@ -19,10 +19,10 @@ The screener downloads live NSE bhavcopy data every morning, scores all 206 F&O 
 
 ## Indicators
 
-### Technical (8)
+### Technical (8) — sourced from yfinance
 | Indicator | Signal Logic |
 |---|---|
-| EMA Alignment | Price > EMA20 > EMA50 > EMA200 = Bullish, reverse = Bearish |
+| EMA Alignment (20/50/200) | Price > EMA20 > EMA50 > EMA200 = Bullish, reverse = Bearish |
 | RSI (14) | 45–70 = Bullish zone, 30–55 = Bearish zone |
 | MACD (12/26/9) | Bullish/bearish crossover in last 2 bars |
 | ADX (14) | >25 with DI+ > DI- = Bull trend, DI- > DI+ = Bear trend |
@@ -31,12 +31,13 @@ The screener downloads live NSE bhavcopy data every morning, scores all 206 F&O 
 | Bollinger Bands (20, 2σ) | Squeeze + price above mid = coiled bullish, below = coiled bearish |
 | 52W Breakout | Breakout above/below 52-week range with volume confirmation |
 
-### F&O (3)
-| Indicator | Signal Logic |
-|---|---|
-| OI Pattern | Long buildup / Short buildup / Short covering / Long unwinding |
-| OI Magnitude | >15% change = medium, >25% = high bonus score |
-| Delivery % | >60% = institutional interest, <20% = speculative |
+### F&O (4) — sourced from NSE bhavcopy (no additional downloads)
+| Indicator | Source | Signal Logic |
+|---|---|---|
+| OI Pattern | F&O bhavcopy (futures) | Long buildup / Short buildup / Short covering / Long unwinding |
+| OI Magnitude | F&O bhavcopy (futures) | >15% change = medium (+1), >25% = high (+2) bonus |
+| Delivery % | CM bhavcopy | >60% = institutional interest, <20% = speculative |
+| PCR per stock | F&O bhavcopy (options) | <0.5 = call-heavy (+2), >1.5 = put-heavy (-2) |
 
 ---
 
@@ -44,13 +45,13 @@ The screener downloads live NSE bhavcopy data every morning, scores all 206 F&O 
 
 | Classification | Threshold | What It Means |
 |---|---|---|
-| Strong Long | ≥ +18 | 7+ indicators bullish — very high conviction |
-| Long Candidate | ≥ +10 | 4–5 indicators aligned — tradeable setup |
-| Neutral | -9 to +9 | No clear edge — wait for setup to develop |
-| Short Candidate | ≤ -10 | 4–5 indicators bearish — tradeable short |
-| Strong Short | ≤ -17 | 7+ indicators bearish — very high conviction |
+| Strong Long | ≥ +19 | 7+ indicators bullish — very high conviction |
+| Long Candidate | ≥ +11 | 4–5 indicators aligned — tradeable setup |
+| Neutral | -10 to +10 | No clear edge — wait for setup to develop |
+| Short Candidate | ≤ -11 | 4–5 indicators bearish — tradeable short |
+| Strong Short | ≤ -19 | 7+ indicators bearish — very high conviction |
 
-Score range: +23 (maximum) to -22 (minimum) across all 11 indicators.
+Score range: +25 (maximum) to -24 (minimum) across all 12 indicators.
 
 ---
 
@@ -79,13 +80,13 @@ RESULTS — 04 Mar 2026
 Market Bias: BEARISH | FII Fut Net: -163,713
 ------------------------------------------------------------
 TOP 10 LONG CANDIDATES:
-  OIL             Score= +15 (T:+12 F:+3) | LONG CANDIDATE  | LONG BUILDUP       | BB:UPPER BAND RIDE | BO:NO BREAKOUT
+  OIL             Score= +16 (T:+12 F:+4) | LONG CANDIDATE  | LONG BUILDUP       | BB:UPPER BAND RIDE | BO:NO BREAKOUT | PCR:0.54
 ------------------------------------------------------------
 TOP 10 SHORT CANDIDATES:
-  VBL             Score= -14 (T:-11 F:-3) | SHORT CANDIDATE | SHORT BUILDUP      | BB:LOWER BAND RIDE | BO:52W LOW BREAKDOWN
+  VBL             Score= -13 (T:-11 F:-2) | SHORT CANDIDATE | SHORT BUILDUP      | BB:LOWER BAND RIDE | BO:52W LOW BREAKDOWN | PCR:0.61
 ------------------------------------------------------------
 OI ALERTS: 3 stocks with OI change >10%
-  AUBANK          OI%=+10.3% | MEDIUM   | OI SHORT BUILDUP
+  FEDERALBNK      OI%=+12.5% | MEDIUM   | OI DIVERGENCE — WATCH
 ```
 
 ---
@@ -142,15 +143,25 @@ All parameters are in `config.py`:
 | `BB_SQUEEZE_THRESHOLD` | 0.05 | Bandwidth < 5% of price = squeeze |
 | `BREAKOUT_NEAR_PCT` | 3.0 | Within 3% of 52W high/low = near breakout |
 | `BREAKOUT_CONFIRM_VOL` | 1.5 | Volume must be >1.5x avg to confirm breakout |
+| `PCR_VERY_BULLISH` | 0.5 | PCR below this = call-heavy = +2 score |
+| `PCR_VERY_BEARISH` | 1.5 | PCR above this = put-heavy = -2 score |
 | `OI_CHANGE_EXTREME` | 40 | OI change % for EXTREME severity tier |
-| `LONG_THRESHOLD` | 10 | Minimum composite score for Long Candidate |
-| `STRONG_LONG_THRESHOLD` | 18 | Minimum composite score for Strong Long |
+| `LONG_THRESHOLD` | 11 | Minimum composite score for Long Candidate |
+| `STRONG_LONG_THRESHOLD` | 19 | Minimum composite score for Strong Long |
 
 ---
 
 ## Universe
 
 206 NSE F&O stocks as of March 2026, auto-synced against live bhavcopy using `sync_fo_universe.py`. Run the sync script periodically (or via scheduled GitHub Action) to keep the universe current with NSE additions and removals.
+
+---
+
+## Roadmap
+
+- **IV Percentile per stock** — requires 30–60 days of options data accumulation; the screener is building this history automatically with each daily run
+- **Relative strength vs Nifty** — normalise scores against index momentum
+- **Sector rotation context** — flag when multiple stocks in a sector align directionally
 
 ---
 
