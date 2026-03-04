@@ -1392,8 +1392,8 @@ def run_screener(trade_date: date = None) -> dict:
     logger.info("-" * 60)
     logger.info("SECTOR SUMMARY:")
     for _, row in sector_summary.iterrows():
-        bar_l = "▲" * row["LONGS"]
-        bar_s = "▼" * row["SHORTS"]
+        bar_l = "L" * row["LONGS"]
+        bar_s = "S" * row["SHORTS"]
         logger.info(
             f"  {row['SECTOR']:<18} Avg={row['AVG_SCORE']:+5.1f} "
             f"| L:{row['LONGS']:2d} S:{row['SHORTS']:2d} N:{row['NEUTRAL']:2d} "
