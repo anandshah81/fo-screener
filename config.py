@@ -119,17 +119,29 @@ OI_CHANGE_HIGH   = 25     # % change for +2/-2 extra
 OI_CHANGE_EXTREME = 40    # % change — exceptional surge, new EXTREME severity tier
 OI_ALERT_THRESHOLD = 10   # % change for OI alert list
 
+# PCR (Put-Call Ratio) per stock — derived from options bhavcopy (STO rows)
+PCR_VERY_BULLISH  = 0.5   # PCR < 0.5  → call-heavy → +2
+PCR_BULLISH       = 0.8   # PCR < 0.8  → mild bullish → +1
+PCR_BEARISH       = 1.2   # PCR > 1.2  → put-heavy → -1
+PCR_VERY_BEARISH  = 1.5   # PCR > 1.5  → extremely put-heavy → -2
+
+# Put-Call Ratio (PCR) thresholds — per stock from options OI
+PCR_STRONG_BULL  = 0.5    # PCR < 0.5  → call-heavy, bullish sentiment  → +2
+PCR_MILD_BULL    = 0.8    # PCR < 0.8  → mild call-heavy                → +1
+PCR_MILD_BEAR    = 1.2    # PCR > 1.2  → mild put-heavy, bearish        → -1
+PCR_STRONG_BEAR  = 1.5    # PCR > 1.5  → put-heavy, bearish sentiment   → -2
+
 DELIVERY_HIGH = 60        # % delivery → institutional
 DELIVERY_LOW  = 20        # % delivery → speculative
 
 # Composite score classification
-# Score range: +23 (max) to -22 (min) across 11 indicators
+# Score range: +25 (max) to -24 (min) across 12 indicators (8 tech + 4 F&O incl. PCR)
 # Strong Long/Short = ~78% of max, requiring 7+ indicators aligned
-# Long/Short candidate = ~43% of max, requiring 4-5 indicators aligned
-STRONG_LONG_THRESHOLD  = 18
-LONG_THRESHOLD         = 10
-SHORT_THRESHOLD        = -10
-STRONG_SHORT_THRESHOLD = -17
+# Long/Short candidate = ~44% of max, requiring 4-5 indicators aligned
+STRONG_LONG_THRESHOLD  = 19
+LONG_THRESHOLD         = 11
+SHORT_THRESHOLD        = -11
+STRONG_SHORT_THRESHOLD = -19
 
 # ─────────────────────────────────────────────
 # YFINANCE SETTINGS

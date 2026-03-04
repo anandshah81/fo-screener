@@ -38,6 +38,7 @@ from config import (
     RSI_BULL_LOW, RSI_BULL_HIGH, RSI_BEAR_LOW, RSI_BEAR_HIGH,
     ADX_TREND_THRESHOLD, VOLUME_HIGH_RATIO, VOLUME_LOW_RATIO,
     OI_CHANGE_MEDIUM, OI_CHANGE_HIGH, OI_CHANGE_EXTREME, OI_ALERT_THRESHOLD,
+    PCR_VERY_BULLISH, PCR_BULLISH, PCR_BEARISH, PCR_VERY_BEARISH,
     DELIVERY_HIGH, DELIVERY_LOW,
     STRONG_LONG_THRESHOLD, LONG_THRESHOLD, SHORT_THRESHOLD, STRONG_SHORT_THRESHOLD,
     YFINANCE_PERIOD, YFINANCE_INTERVAL, YFINANCE_SUFFIX,
@@ -185,6 +186,79 @@ def download_participant_oi(trade_date: date, session: requests.Session) -> pd.D
 # ─────────────────────────────────────────────
 # PARSE NSE DATA
 # ─────────────────────────────────────────────
+
+def parse_options_pcr(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
+    """
+    Extract per-stock PCR (Put-Call Ratio) from the F&O bhavcopy STO rows.
+    Uses the same raw bhavcopy df — no additional download needed.
+    Returns DataFrame: SYMBOL, CE_OI, PE_OI, PCR
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Find instrument type column
+    inst_col = None
+    for c in df.columns:
+        if c.upper().strip() in ("FININSTRMTP", "INSTRUMENT", "INSTTYPE"):
+            inst_col = c
+            break
+    if inst_col is None:
+        return pd.DataFrame()
+
+    inst_series = df[inst_col].astype(str).str.strip().str.upper()
+    opts = df[inst_series.isin({"STO", "OPTSTK"})].copy().reset_index(drop=True)
+    if opts.empty:
+        logger.warning("No stock options (STO) rows found for PCR calculation")
+        return pd.DataFrame()
+
+    logger.info(f"Stock options rows for PCR: {len(opts)}")
+
+    def find_col(candidates):
+        for name in candidates:
+            if name in opts.columns:
+                return name
+        return None
+
+    sym_col    = find_col(["TCKRSYMB", "SYMBOL", "SYMBOLNAME"])
+    oi_col     = find_col(["OPNINTRST", "OPEN_INT", "OPENINT", "OI"])
+    opt_type   = find_col(["OPTNTP", "OPTION_TYPE", "OPTTYPE", "OPTYPE"])
+    expiry_col = find_col(["XPRYDT", "EXPIRY_DT", "EXPDATE"])
+
+    if not sym_col or not oi_col or not opt_type:
+        logger.warning("Missing critical columns for PCR calculation")
+        return pd.DataFrame()
+
+    opts2 = opts[[sym_col, opt_type, oi_col]].copy()
+    opts2.columns = ["SYMBOL", "OPT_TYPE", "OI"]
+    opts2["OI"] = pd.to_numeric(opts2["OI"], errors="coerce").fillna(0)
+    opts2["OPT_TYPE"] = opts2["OPT_TYPE"].astype(str).str.strip().str.upper()
+
+    # Filter to nearest expiry if expiry column available
+    if expiry_col:
+        opts["_EXPIRY"] = pd.to_datetime(opts[expiry_col], errors="coerce")
+        cm = pd.Timestamp(trade_date).replace(day=1)
+        nm = cm + pd.DateOffset(months=1)
+        mask = (opts["_EXPIRY"] >= cm) & (opts["_EXPIRY"] < nm)
+        if mask.sum() > 0:
+            opts2 = opts2[mask.values]
+        else:
+            nearest = opts["_EXPIRY"].dropna().min()
+            opts2 = opts2[opts["_EXPIRY"].values == nearest]
+
+    # Aggregate CE and PE OI per symbol
+    ce = opts2[opts2["OPT_TYPE"] == "CE"].groupby("SYMBOL")["OI"].sum().rename("CE_OI")
+    pe = opts2[opts2["OPT_TYPE"] == "PE"].groupby("SYMBOL")["OI"].sum().rename("PE_OI")
+
+    pcr_df = pd.concat([ce, pe], axis=1).fillna(0).reset_index()
+    pcr_df["PCR"] = np.where(
+        pcr_df["CE_OI"] > 0,
+        pcr_df["PE_OI"] / pcr_df["CE_OI"],
+        np.nan
+    )
+    pcr_df = pcr_df[pcr_df["PCR"].notna()].copy()
+    logger.info(f"PCR computed for {len(pcr_df)} stocks")
+    return pcr_df
+
 
 def parse_fo_bhavcopy(df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     """
@@ -908,7 +982,7 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
 # F&O SCORING
 # ─────────────────────────────────────────────
 
-def calculate_fo_score(fo_row: pd.Series, cm_row: pd.Series) -> dict:
+def calculate_fo_score(fo_row: pd.Series, cm_row: pd.Series, pcr_val: float = None) -> dict:
     """
     Calculate F&O score for a single stock using bhavcopy data.
     Returns score components and total F&O score.
@@ -985,12 +1059,40 @@ def calculate_fo_score(fo_row: pd.Series, cm_row: pd.Series) -> dict:
     score += del_score
     components["DELIVERY"] = {"score": del_score, "signal": del_signal, "value": delivery_pct}
 
+    # ── PCR (Put-Call Ratio) ────────────────────────
+    if pcr_val is not None and not pd.isna(pcr_val):
+        if pcr_val < PCR_VERY_BULLISH:
+            pcr_score  = 2
+            pcr_signal = "CALL HEAVY"
+        elif pcr_val < PCR_BULLISH:
+            pcr_score  = 1
+            pcr_signal = "MILD CALL HEAVY"
+        elif pcr_val > PCR_VERY_BEARISH:
+            pcr_score  = -2
+            pcr_signal = "PUT HEAVY"
+        elif pcr_val > PCR_BEARISH:
+            pcr_score  = -1
+            pcr_signal = "MILD PUT HEAVY"
+        else:
+            pcr_score  = 0
+            pcr_signal = "BALANCED"
+    else:
+        pcr_score  = 0
+        pcr_signal = "N/A"
+        pcr_val    = np.nan
+
+    score += pcr_score
+    components["PCR"] = {"score": pcr_score, "signal": pcr_signal,
+                         "value": round(float(pcr_val), 2) if not pd.isna(pcr_val) else None}
+
     return {
         "fo_score": score,
         "fo_components": components,
         "oi_signal": oi_signal,
         "oi_change_pct": round(float(oi_chg_pct), 2) if not pd.isna(oi_chg_pct) else None,
         "delivery_pct": round(delivery_pct, 1) if not pd.isna(delivery_pct) else None,
+        "pcr": round(float(pcr_val), 2) if not pd.isna(pcr_val) else None,
+        "pcr_signal": pcr_signal,
     }
 
 
@@ -1055,11 +1157,14 @@ def run_screener(trade_date: date = None) -> dict:
     logger.info("STEP 2: Parsing NSE data...")
     fo_data = parse_fo_bhavcopy(fo_raw, trade_date) if fo_raw is not None else pd.DataFrame()
     cm_data = parse_cm_bhavcopy(cm_raw) if cm_raw is not None else pd.DataFrame()
+    pcr_data = parse_options_pcr(fo_raw, trade_date) if fo_raw is not None else pd.DataFrame()
     macro   = parse_participant_oi(poi_raw) if poi_raw is not None else {}
 
     # Create lookup dicts
-    fo_lookup = fo_data.set_index("SYMBOL").to_dict(orient="index") if not fo_data.empty else {}
-    cm_lookup = cm_data.set_index("SYMBOL").to_dict(orient="index") if not cm_data.empty else {}
+    fo_lookup  = fo_data.set_index("SYMBOL").to_dict(orient="index") if not fo_data.empty else {}
+    cm_lookup  = cm_data.set_index("SYMBOL").to_dict(orient="index") if not cm_data.empty else {}
+    pcr_lookup = pcr_data.set_index("SYMBOL")["PCR"].to_dict() if not pcr_data.empty else {}
+    logger.info(f"PCR available for {len(pcr_lookup)} stocks")
 
     # ── Step 3: Fetch OHLCV data ─────────────────────
     logger.info(f"STEP 3: Fetching OHLCV for {len(FO_STOCKS)} stocks via yfinance...")
@@ -1079,7 +1184,8 @@ def run_screener(trade_date: date = None) -> dict:
             # F&O scoring
             fo_row = pd.Series(fo_lookup.get(symbol, {}))
             cm_row = pd.Series(cm_lookup.get(symbol, {}))
-            fo = calculate_fo_score(fo_row, cm_row)
+            pcr_val = pcr_lookup.get(symbol, None)
+            fo = calculate_fo_score(fo_row, cm_row, pcr_val)
 
             tech_score = tech["technical_score"] if tech else 0
             fo_score   = fo["fo_score"]
@@ -1094,6 +1200,8 @@ def run_screener(trade_date: date = None) -> dict:
                 "OI_SIGNAL": fo.get("oi_signal", "N/A"),
                 "OI_CHANGE_PCT": fo.get("oi_change_pct"),
                 "DELIVERY_PCT": fo.get("delivery_pct"),
+                "PCR": fo.get("pcr"),
+                "PCR_SIGNAL": fo.get("pcr_signal", "N/A"),
                 "PRICE": tech["indicators"].get("PRICE") if tech else None,
                 "PRICE_CHANGE_PCT": tech["indicators"].get("PRICE_CHANGE_PCT") if tech else None,
                 "RSI": tech["indicators"].get("RSI") if tech else None,
@@ -1202,11 +1310,12 @@ def run_screener(trade_date: date = None) -> dict:
         bb  = row.get("BB_SIGNAL", "N/A")
         bo  = row.get("BREAKOUT_SIGNAL", "N/A")
         sq  = " [SQZ]" if row.get("BB_SQUEEZE") else ""
+        pcr = f"{row.get('PCR', 'N/A')}" if row.get("PCR") else "N/A"
         logger.info(
             f"  {row['SYMBOL']:<15} Score={row['COMPOSITE_SCORE']:+4d} "
             f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d}) "
             f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A'):<18} "
-            f"| BB:{bb}{sq} | BO:{bo}"
+            f"| BB:{bb}{sq} | BO:{bo} | PCR:{pcr}"
         )
     logger.info("-" * 60)
     logger.info("TOP 10 SHORT CANDIDATES:")
@@ -1214,11 +1323,12 @@ def run_screener(trade_date: date = None) -> dict:
         bb  = row.get("BB_SIGNAL", "N/A")
         bo  = row.get("BREAKOUT_SIGNAL", "N/A")
         sq  = " [SQZ]" if row.get("BB_SQUEEZE") else ""
+        pcr = f"{row.get('PCR', 'N/A')}" if row.get("PCR") else "N/A"
         logger.info(
             f"  {row['SYMBOL']:<15} Score={row['COMPOSITE_SCORE']:+4d} "
             f"(T:{row['TECHNICAL_SCORE']:+3d} F:{row['FO_SCORE']:+2d}) "
             f"| {row['SIGNAL']:<15} | {row.get('OI_SIGNAL', 'N/A'):<18} "
-            f"| BB:{bb}{sq} | BO:{bo}"
+            f"| BB:{bb}{sq} | BO:{bo} | PCR:{pcr}"
         )
     logger.info("-" * 60)
     logger.info(f"OI ALERTS: {len(oi_alerts)} stocks with OI change >{OI_ALERT_THRESHOLD}%")
