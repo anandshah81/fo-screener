@@ -1417,6 +1417,78 @@ def run_screener(trade_date: date = None) -> dict:
     df_results.to_csv(output_path, index=False)
     logger.info(f"Output saved: {output_path}")
 
+    # ── Step 6b: Update signal history & compute persistence ──
+    history_path = os.path.join(os.path.dirname(output_path), "signal_history.csv")
+
+    # Append today's signals to history
+    today_signals = df_results[["SYMBOL", "COMPOSITE_SCORE", "SIGNAL", "RS_PCT"]].copy()
+    today_signals.insert(0, "DATE", trade_date.strftime("%Y-%m-%d"))
+
+    if os.path.exists(history_path):
+        history = pd.read_csv(history_path)
+        # Remove today if already present (re-run case)
+        history = history[history["DATE"] != trade_date.strftime("%Y-%m-%d")]
+        history = pd.concat([history, today_signals], ignore_index=True)
+    else:
+        history = today_signals.copy()
+
+    history.to_csv(history_path, index=False)
+    logger.info(f"Signal history updated: {len(history)} rows across {history['DATE'].nunique()} days")
+
+    # Compute persistence — min 3 consecutive days
+    history["DATE"] = pd.to_datetime(history["DATE"])
+    history = history.sort_values(["SYMBOL", "DATE"])
+
+    def is_directional(sig):
+        return sig in ("LONG CANDIDATE", "STRONG LONG", "SHORT CANDIDATE", "STRONG SHORT")
+
+    def signal_direction(sig):
+        if sig in ("LONG CANDIDATE", "STRONG LONG"):
+            return "LONG"
+        elif sig in ("SHORT CANDIDATE", "STRONG SHORT"):
+            return "SHORT"
+        return None
+
+    persistence = {}
+    for symbol, grp in history.groupby("SYMBOL"):
+        grp = grp.sort_values("DATE").tail(10)  # last 10 days max
+        if len(grp) < 2:
+            continue
+        # Check consecutive streak ending today
+        today_sig = grp.iloc[-1]["SIGNAL"]
+        today_dir = signal_direction(today_sig)
+        if today_dir is None:
+            continue
+        streak = 1
+        dates = grp["DATE"].tolist()
+        sigs  = grp["SIGNAL"].tolist()
+        for i in range(len(dates) - 2, -1, -1):
+            # Must be consecutive trading days (gap <= 4 calendar days for weekends)
+            gap = (dates[i + 1] - dates[i]).days
+            if gap > 4:
+                break
+            if signal_direction(sigs[i]) == today_dir:
+                streak += 1
+            else:
+                break
+        if streak >= 3:
+            persistence[symbol] = {"streak": streak, "direction": today_dir}
+
+    # Add persistence to df_results
+    df_results["PERSISTENCE"] = df_results["SYMBOL"].map(
+        lambda s: persistence.get(s, {}).get("streak", 0)
+    )
+    df_results["PERSIST_DIR"] = df_results["SYMBOL"].map(
+        lambda s: persistence.get(s, {}).get("direction", "")
+    )
+
+    persistent_longs  = df_results[df_results["PERSIST_DIR"] == "LONG"].sort_values(
+        ["PERSISTENCE", "COMPOSITE_SCORE"], ascending=[False, False])
+    persistent_shorts = df_results[df_results["PERSIST_DIR"] == "SHORT"].sort_values(
+        ["PERSISTENCE", "COMPOSITE_SCORE"], ascending=[False, True])
+
+    logger.info(f"Persistent signals: {len(persistence)} stocks with 3+ day streak")
+
     # ── Step 7: Print summary ────────────────────────
     logger.info("")
     logger.info("=" * 60)
@@ -1471,6 +1543,25 @@ def run_screener(trade_date: date = None) -> dict:
             f"| L:{row['LONGS']:2d} S:{row['SHORTS']:2d} N:{row['NEUTRAL']:2d} "
             f"| {row['BIAS']:<14} {bar_l}{bar_s}"
         )
+    logger.info("-" * 60)
+    if len(persistence) > 0:
+        logger.info(f"PERSISTENT SIGNALS (3+ consecutive days):")
+        if not persistent_longs.empty:
+            logger.info("  LONGS:")
+            for _, row in persistent_longs.iterrows():
+                logger.info(
+                    f"    {row['SYMBOL']:<15} [P{int(row['PERSISTENCE'])}d] "
+                    f"Score={row['COMPOSITE_SCORE']:+4d} | {row['SIGNAL']}"
+                )
+        if not persistent_shorts.empty:
+            logger.info("  SHORTS:")
+            for _, row in persistent_shorts.iterrows():
+                logger.info(
+                    f"    {row['SYMBOL']:<15} [P{int(row['PERSISTENCE'])}d] "
+                    f"Score={row['COMPOSITE_SCORE']:+4d} | {row['SIGNAL']}"
+                )
+    else:
+        logger.info("PERSISTENT SIGNALS: None yet — need 3+ days of history")
     logger.info("=" * 60)
 
     return {
@@ -1482,6 +1573,9 @@ def run_screener(trade_date: date = None) -> dict:
         "top_shorts": top_shorts,
         "oi_alerts": oi_alerts,
         "sector_summary": sector_summary,
+        "persistent_longs": persistent_longs,
+        "persistent_shorts": persistent_shorts,
+        "persistence": persistence,
     }
 
 
@@ -1517,6 +1611,8 @@ if __name__ == "__main__":
                 "top_shorts": results["top_shorts"].fillna("").to_dict(orient="records"),
                 "oi_alerts": results["oi_alerts"].fillna("").to_dict(orient="records"),
                 "sector_summary": results["sector_summary"].fillna("").to_dict(orient="records"),
+                "persistent_longs": results["persistent_longs"].fillna("").to_dict(orient="records"),
+                "persistent_shorts": results["persistent_shorts"].fillna("").to_dict(orient="records"),
                 "full_universe": results["full_universe"].fillna("").to_dict(orient="records"),
             }
             json.dump(serializable, f, indent=2, default=str)
