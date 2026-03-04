@@ -106,7 +106,7 @@ VOLUME_LOW_RATIO  = 0.5   # <0.5x avg → weak
 
 OI_CHANGE_MEDIUM = 15     # % change for +1/-1 extra
 OI_CHANGE_HIGH   = 25     # % change for +2/-2 extra
-OI_ALERT_THRESHOLD = 20   # % change for OI alert list
+OI_ALERT_THRESHOLD = 10   # % change for OI alert list
 
 DELIVERY_HIGH = 60        # % delivery → institutional
 DELIVERY_LOW  = 20        # % delivery → speculative
@@ -165,7 +165,7 @@ FO_STOCKS = [
     "LUPIN", "M&M", "M&MFIN", "MANAPPURAM", "MARICO",
     "MARUTI", "UNITDSPR", "MCX", "METROPOLIS", "MFSL",
     "MGL", "MOTHERSON", "MPHASIS", "MRF", "MUTHOOTFIN",
-    "NATIONALUM", "NAUKRI", "NAVINFLUOR", "NESTLEIND", "NIFTYBEES",
+    "NATIONALUM", "NAUKRI", "NAVINFLUOR", "NESTLEIND",
     "NMDC", "NTPC", "OBEROIRLTY", "OFSS", "OIL",
     "ONGC", "PAGEIND", "PIRAMALENT", "PERSISTENT", "PETRONET",
     "PFC", "PIDILITIND", "PIIND", "PNB", "POLYCAB",
@@ -175,7 +175,7 @@ FO_STOCKS = [
     "SYNGENE", "TATACHEM", "TATACOMM", "TATACONSUM", "TATAMOTORS",
     "TATAPOWER", "TATASTEEL", "TCS", "TECHM", "TITAN",
     "TORNTPHARM", "TRENT", "TVSMOTOR", "UBL", "ULTRACEMCO",
-    "UPL", "VEDL", "VOLTAS", "WHIRLPOOL", "WIPRO",
+    "UPL", "VEDL", "VOLTAS", "WIPRO",
     "ZEEL", "ETERNAL", "ZYDUSLIFE",
 ]
 
