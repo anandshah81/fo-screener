@@ -37,12 +37,14 @@ from config import (
     MACD_FAST, MACD_SLOW, MACD_SIGNAL, VOLUME_MA_PERIOD,
     RSI_BULL_LOW, RSI_BULL_HIGH, RSI_BEAR_LOW, RSI_BEAR_HIGH,
     ADX_TREND_THRESHOLD, VOLUME_HIGH_RATIO, VOLUME_LOW_RATIO,
-    OI_CHANGE_MEDIUM, OI_CHANGE_HIGH, OI_ALERT_THRESHOLD,
+    OI_CHANGE_MEDIUM, OI_CHANGE_HIGH, OI_CHANGE_EXTREME, OI_ALERT_THRESHOLD,
     DELIVERY_HIGH, DELIVERY_LOW,
     STRONG_LONG_THRESHOLD, LONG_THRESHOLD, SHORT_THRESHOLD, STRONG_SHORT_THRESHOLD,
     YFINANCE_PERIOD, YFINANCE_INTERVAL, YFINANCE_SUFFIX,
     YFINANCE_BATCH_SIZE, YFINANCE_BATCH_DELAY,
     LOGS_DIR, OUTPUT_CSV,
+    BB_PERIOD, BB_STD_DEV, BB_SQUEEZE_THRESHOLD,
+    BREAKOUT_LOOKBACK, BREAKOUT_NEAR_PCT, BREAKOUT_CONFIRM_VOL,
 )
 
 # ─────────────────────────────────────────────
@@ -575,6 +577,122 @@ def compute_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3
     return supertrend, direction
 
 
+def compute_bollinger_bands(close: pd.Series) -> dict:
+    """
+    Compute Bollinger Bands and detect squeeze condition.
+    Returns upper, lower, mid, bandwidth, %B, and squeeze flag.
+    """
+    mid = close.rolling(BB_PERIOD).mean()
+    std = close.rolling(BB_PERIOD).std()
+    upper = mid + BB_STD_DEV * std
+    lower = mid - BB_STD_DEV * std
+    bandwidth = (upper - lower) / mid  # normalised bandwidth
+    pct_b = (close - lower) / (upper - lower).replace(0, np.nan)
+
+    last_bw   = bandwidth.iloc[-1]
+    last_pctb = pct_b.iloc[-1]
+    squeeze   = (not pd.isna(last_bw)) and (last_bw < BB_SQUEEZE_THRESHOLD)
+
+    # Score:
+    # +2 = squeeze + price above mid (coiled bullish)
+    # -2 = squeeze + price below mid (coiled bearish)
+    # +1 = %B > 0.8 (riding upper band, momentum)
+    # -1 = %B < 0.2 (riding lower band, weakness)
+    #  0 = neutral
+    last_close = close.iloc[-1]
+    last_mid   = mid.iloc[-1]
+
+    if squeeze and last_close > last_mid:
+        bb_score  = 2
+        bb_signal = "SQUEEZE BULLISH"
+    elif squeeze and last_close < last_mid:
+        bb_score  = -2
+        bb_signal = "SQUEEZE BEARISH"
+    elif not pd.isna(last_pctb) and last_pctb > 0.8:
+        bb_score  = 1
+        bb_signal = "UPPER BAND RIDE"
+    elif not pd.isna(last_pctb) and last_pctb < 0.2:
+        bb_score  = -1
+        bb_signal = "LOWER BAND RIDE"
+    else:
+        bb_score  = 0
+        bb_signal = "MID RANGE"
+
+    return {
+        "score":     bb_score,
+        "signal":    bb_signal,
+        "squeeze":   squeeze,
+        "bandwidth": round(float(last_bw), 4)   if not pd.isna(last_bw)   else None,
+        "pct_b":     round(float(last_pctb), 3) if not pd.isna(last_pctb) else None,
+        "upper":     round(float(upper.iloc[-1]), 2),
+        "lower":     round(float(lower.iloc[-1]), 2),
+        "mid":       round(float(last_mid), 2),
+    }
+
+
+def compute_breakout(df: pd.DataFrame, vol_ratio: float) -> dict:
+    """
+    Detect 52-week high/low breakouts and near-breakout conditions.
+    Requires volume confirmation for a true breakout signal.
+    """
+    close  = df["Close"]
+    high   = df["High"]
+    low    = df["Low"]
+
+    # Use full available history up to BREAKOUT_LOOKBACK days
+    lookback = min(BREAKOUT_LOOKBACK * 5, len(df) - 1)  # ~252 trading days
+    period_high = high.iloc[-lookback:-1].max()
+    period_low  = low.iloc[-lookback:-1].min()
+
+    last_close = close.iloc[-1]
+    last_high  = high.iloc[-1]
+    last_low   = low.iloc[-1]
+
+    vol_confirmed = vol_ratio >= BREAKOUT_CONFIRM_VOL
+
+    near_high = (period_high - last_close) / period_high * 100 <= BREAKOUT_NEAR_PCT
+    near_low  = (last_close - period_low)  / period_low  * 100 <= BREAKOUT_NEAR_PCT
+
+    # True breakout: price closes above/below the period range
+    breakout_up   = last_close > period_high
+    breakout_down = last_close < period_low
+
+    if breakout_up and vol_confirmed:
+        bo_score  = 3
+        bo_signal = "52W HIGH BREAKOUT"
+    elif breakout_up and not vol_confirmed:
+        bo_score  = 1
+        bo_signal = "52W HIGH (UNCONFIRMED)"
+    elif breakout_down and vol_confirmed:
+        bo_score  = -3
+        bo_signal = "52W LOW BREAKDOWN"
+    elif breakout_down and not vol_confirmed:
+        bo_score  = -1
+        bo_signal = "52W LOW (UNCONFIRMED)"
+    elif near_high:
+        bo_score  = 1
+        bo_signal = "NEAR 52W HIGH"
+    elif near_low:
+        bo_score  = -1
+        bo_signal = "NEAR 52W LOW"
+    else:
+        bo_score  = 0
+        bo_signal = "NO BREAKOUT"
+
+    dist_from_high = round((period_high - last_close) / period_high * 100, 1)
+    dist_from_low  = round((last_close - period_low)  / period_low  * 100, 1)
+
+    return {
+        "score":          bo_score,
+        "signal":         bo_signal,
+        "period_high":    round(float(period_high), 2),
+        "period_low":     round(float(period_low), 2),
+        "dist_from_high": dist_from_high,
+        "dist_from_low":  dist_from_low,
+        "vol_confirmed":  vol_confirmed,
+    }
+
+
 def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     """
     Calculate all technical indicators for a single stock.
@@ -739,6 +857,37 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     score += vol_score
     components["VOLUME"] = {"score": vol_score, "signal": vol_signal, "ratio": round(vol_ratio, 2)}
 
+    # ── Bollinger Bands ─────────────────────────────
+    try:
+        bb = compute_bollinger_bands(close)
+        score += bb["score"]
+        components["BOLLINGER"] = bb
+        indicators["BB_UPPER"]     = bb["upper"]
+        indicators["BB_LOWER"]     = bb["lower"]
+        indicators["BB_MID"]       = bb["mid"]
+        indicators["BB_BANDWIDTH"] = bb["bandwidth"]
+        indicators["BB_PCT_B"]     = bb["pct_b"]
+        indicators["BB_SQUEEZE"]   = bb["squeeze"]
+    except Exception as e:
+        logger.debug(f"Bollinger error: {e}")
+        bb = {"score": 0, "signal": "N/A", "squeeze": False}
+        components["BOLLINGER"] = bb
+
+    # ── Breakout Detection ──────────────────────────
+    try:
+        bo = compute_breakout(df, vol_ratio)
+        score += bo["score"]
+        components["BREAKOUT"] = bo
+        indicators["BREAKOUT_SIGNAL"]     = bo["signal"]
+        indicators["DIST_FROM_52W_HIGH"]  = bo["dist_from_high"]
+        indicators["DIST_FROM_52W_LOW"]   = bo["dist_from_low"]
+        indicators["W52_HIGH"]            = bo["period_high"]
+        indicators["W52_LOW"]             = bo["period_low"]
+    except Exception as e:
+        logger.debug(f"Breakout error: {e}")
+        bo = {"score": 0, "signal": "N/A"}
+        components["BREAKOUT"] = bo
+
     indicators["PRICE"] = round(last_close, 2)
     indicators["PRICE_CHANGE_PCT"] = round(
         (last_close - close.iloc[-2]) / close.iloc[-2] * 100, 2
@@ -749,6 +898,9 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         "indicators": indicators,
         "components": components,
         "ema_signal": ema_signal,
+        "bb_signal":  components["BOLLINGER"]["signal"],
+        "bb_squeeze": components["BOLLINGER"]["squeeze"],
+        "breakout_signal": components["BREAKOUT"]["signal"],
     }
 
 
@@ -953,6 +1105,17 @@ def run_screener(trade_date: date = None) -> dict:
                 "EMA20": tech["indicators"].get("EMA20") if tech else None,
                 "EMA50": tech["indicators"].get("EMA50") if tech else None,
                 "EMA200": tech["indicators"].get("EMA200") if tech else None,
+                # Bollinger Bands
+                "BB_SIGNAL":    tech.get("bb_signal", "N/A") if tech else "N/A",
+                "BB_SQUEEZE":   tech.get("bb_squeeze", False) if tech else False,
+                "BB_BANDWIDTH": tech["indicators"].get("BB_BANDWIDTH") if tech else None,
+                "BB_PCT_B":     tech["indicators"].get("BB_PCT_B") if tech else None,
+                # Breakout
+                "BREAKOUT_SIGNAL":    tech.get("breakout_signal", "N/A") if tech else "N/A",
+                "DIST_FROM_52W_HIGH": tech["indicators"].get("DIST_FROM_52W_HIGH") if tech else None,
+                "DIST_FROM_52W_LOW":  tech["indicators"].get("DIST_FROM_52W_LOW") if tech else None,
+                "W52_HIGH":           tech["indicators"].get("W52_HIGH") if tech else None,
+                "W52_LOW":            tech["indicators"].get("W52_LOW") if tech else None,
             }
             results.append(row)
 
@@ -980,11 +1143,47 @@ def run_screener(trade_date: date = None) -> dict:
         (df_results["OI_CHANGE_PCT"].abs() >= OI_ALERT_THRESHOLD)
     ].copy()
 
-    # Alert severity
+    # Alert severity — 3 tiers aligned with scoring bands
+    # MEDIUM: 10–24% | HIGH: 25–39% | EXTREME: >=40%
+    # Cross-referenced with composite score for contextual label
     if not oi_alerts.empty:
-        oi_alerts["ALERT_SEVERITY"] = oi_alerts["OI_CHANGE_PCT"].abs().apply(
-            lambda x: "HIGH" if x >= 30 else "MEDIUM"
-        )
+        def oi_severity(row):
+            abs_oi = abs(row["OI_CHANGE_PCT"])
+            comp   = row["COMPOSITE_SCORE"]
+            oi_sig = row.get("OI_SIGNAL", "")
+
+            # Tier
+            if abs_oi >= OI_CHANGE_EXTREME:
+                tier = "EXTREME"
+            elif abs_oi >= OI_CHANGE_HIGH:
+                tier = "HIGH"
+            else:
+                tier = "MEDIUM"
+
+            # Cross-reference composite score for context label
+            if tier == "EXTREME":
+                if comp >= LONG_THRESHOLD:
+                    label = "EXTREME LONG BUILDUP"
+                elif comp <= SHORT_THRESHOLD:
+                    label = "EXTREME SHORT BUILDUP"
+                else:
+                    label = "EXTREME OI — WATCH"
+            elif tier == "HIGH":
+                if comp >= LONG_THRESHOLD:
+                    label = "STRONG OI CONFIRMATION"
+                elif comp <= SHORT_THRESHOLD:
+                    label = "STRONG BEARISH OI"
+                else:
+                    label = "HIGH OI DIVERGENCE"
+            else:  # MEDIUM
+                if comp >= LONG_THRESHOLD or comp <= SHORT_THRESHOLD:
+                    label = f"OI {oi_sig}" if oi_sig and oi_sig != "N/A" else "OI ALERT"
+                else:
+                    label = "OI DIVERGENCE — WATCH"
+
+            return pd.Series({"ALERT_SEVERITY": tier, "ALERT_LABEL": label})
+
+        oi_alerts[["ALERT_SEVERITY", "ALERT_LABEL"]] = oi_alerts.apply(oi_severity, axis=1)
 
     # ── Step 6: Save output ──────────────────────────
     output_path = OUTPUT_CSV.format(date=trade_date.strftime("%Y%m%d"))

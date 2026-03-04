@@ -91,6 +91,16 @@ MACD_SLOW  = 26
 MACD_SIGNAL = 9
 VOLUME_MA_PERIOD = 20
 
+# Bollinger Bands
+BB_PERIOD = 20
+BB_STD_DEV = 2.0
+BB_SQUEEZE_THRESHOLD = 0.05   # bandwidth < 5% of price → squeeze
+
+# Breakout Detection
+BREAKOUT_LOOKBACK = 52        # weeks (mapped to ~252 trading days for 1y)
+BREAKOUT_NEAR_PCT = 3.0       # within 3% of 52w high/low = "near breakout"
+BREAKOUT_CONFIRM_VOL = 1.5    # volume must be >1.5x avg to confirm breakout
+
 # ─────────────────────────────────────────────
 # SCORING THRESHOLDS
 # ─────────────────────────────────────────────
@@ -106,16 +116,20 @@ VOLUME_LOW_RATIO  = 0.5   # <0.5x avg → weak
 
 OI_CHANGE_MEDIUM = 15     # % change for +1/-1 extra
 OI_CHANGE_HIGH   = 25     # % change for +2/-2 extra
+OI_CHANGE_EXTREME = 40    # % change — exceptional surge, new EXTREME severity tier
 OI_ALERT_THRESHOLD = 10   # % change for OI alert list
 
 DELIVERY_HIGH = 60        # % delivery → institutional
 DELIVERY_LOW  = 20        # % delivery → speculative
 
 # Composite score classification
-STRONG_LONG_THRESHOLD  = 14
-LONG_THRESHOLD         = 8
-SHORT_THRESHOLD        = -8
-STRONG_SHORT_THRESHOLD = -14
+# Score range: +23 (max) to -22 (min) across 11 indicators
+# Strong Long/Short = ~78% of max, requiring 7+ indicators aligned
+# Long/Short candidate = ~43% of max, requiring 4-5 indicators aligned
+STRONG_LONG_THRESHOLD  = 18
+LONG_THRESHOLD         = 10
+SHORT_THRESHOLD        = -10
+STRONG_SHORT_THRESHOLD = -17
 
 # ─────────────────────────────────────────────
 # YFINANCE SETTINGS
