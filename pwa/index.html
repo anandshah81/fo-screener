@@ -420,21 +420,22 @@
 <script>
 // ─── CONFIG ─────────────────────────────────────────────────────
 // IMPORTANT: Replace with your actual Google Sheet ID and sheet GID values
-const SHEET_ID = "1P9owULYqmqBcvlzbQnUoCA3qBaJYviIVj25gaHx9Dsg";
+const SHEET_ID = "https://docs.google.com/spreadsheets/d/1P9owULYqmqBcvlzbQnUoCA3qBaJYviIVj25gaHx9Dsg/edit"; // ← Replace this
 
 // Google Sheets public CSV export URLs per tab
-// Sheet is shared as "Anyone with link can view"
+// Make sure the sheet is shared as "Anyone with link can view"
 function sheetCsvUrl(gid) {
   return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
 }
 
-// Tab GIDs from Google Sheet URL
+// Tab GIDs (find these in the Google Sheet URL when you click each tab)
+// Format: &gid=XXXXXXXX
 const TAB_GIDS = {
-  morning_brief: "805186472",
-  top_longs:     "2059154994",
-  top_shorts:    "1932997497",
-  oi_alerts:     "518132719",
-  full_universe: "1749352389",
+  morning_brief: "0",          // First tab is usually 0
+  top_longs:     "1",          // Update after creating sheet
+  top_shorts:    "2",
+  oi_alerts:     "3",
+  full_universe: "4",
 };
 
 // ─── STATE ──────────────────────────────────────────────────────
@@ -497,6 +498,30 @@ function parseCSV(text) {
   });
 }
 
+// ─── COLUMN NORMALIZER ───────────────────────────────────────────
+// Maps Google Sheets CSV column names → internal keys used by render functions
+function normalizeRow(row) {
+  return {
+    SYMBOL:          row["Stock"]           || row["SYMBOL"]           || "",
+    COMPOSITE_SCORE: row["Composite Score"] || row["COMPOSITE_SCORE"]  || 0,
+    TECHNICAL_SCORE: row["Technical Score"] || row["TECHNICAL_SCORE"]  || 0,
+    FO_SCORE:        row["F&O Score"]       || row["FO_SCORE"]         || 0,
+    SIGNAL:          row["Signal Type"]     || row["SIGNAL"]           || "",
+    OI_SIGNAL:       row["Signal Type"]     || row["OI_SIGNAL"]        || "",
+    OI_CHANGE_PCT:   row["OI Change %"]     || row["OI_CHANGE_PCT"]    || null,
+    PRICE_CHANGE_PCT:row["Price Change %"]  || row["PRICE_CHANGE_PCT"] || null,
+    DELIVERY_PCT:    row["Delivery %"]      || row["DELIVERY_PCT"]     || null,
+    ADX:             row["ADX"]             || row["adx"]              || null,
+    RSI:             row["RSI"]             || row["rsi"]              || null,
+    SUPERTREND_SIGNAL: row["Supertrend"]    || row["SUPERTREND_SIGNAL"]|| "",
+    MACD_SIGNAL:     row["MACD Direction"]  || row["MACD_SIGNAL"]      || "",
+    EMA_SIGNAL:      row["EMA Alignment"]   || row["EMA_SIGNAL"]       || "",
+    VOLUME_RATIO:    row["Volume Ratio"]    || row["VOLUME_RATIO"]     || null,
+    RANK:            row["Rank"]            || row["RANK"]             || 0,
+    ALERT_SEVERITY:  row["ALERT_SEVERITY"]  || "MEDIUM",
+  };
+}
+
 // ─── DATA FETCHING ───────────────────────────────────────────────
 async function fetchSheetData() {
   if (SHEET_ID === "YOUR_GOOGLE_SHEET_ID_HERE") {
@@ -519,12 +544,32 @@ async function fetchSheetData() {
     const briefResp = await fetch(sheetCsvUrl(TAB_GIDS.morning_brief));
     const briefText = await briefResp.text();
 
+    // Parse macro from brief CSV
+    const briefLines = briefText.split("\n");
+    let market_bias = "NEUTRAL", fii_index_fut_net = 0, trade_date = "";
+    briefLines.forEach(line => {
+      if (line.includes("Market Bias:")) {
+        const m = line.match(/BULLISH|BEARISH|NEUTRAL/);
+        if (m) market_bias = m[0];
+      }
+      if (line.includes("FII Index Futures:")) {
+        const m = line.match(/([\d,]+)/);
+        if (m) fii_index_fut_net = line.includes("SHORT") ? -parseInt(m[1].replace(/,/g,"")) : parseInt(m[1].replace(/,/g,""));
+      }
+      if (line.includes("Date:")) {
+        const m = line.match(/Date:,([^,]+)/);
+        if (m) trade_date = m[1].trim();
+      }
+    });
+
     return {
       brief: briefText,
-      top_longs:    parseCSV(longsText),
-      top_shorts:   parseCSV(shortsText),
-      oi_alerts:    parseCSV(alertsText),
-      full_universe: parseCSV(universeText),
+      macro: { market_bias, fii_index_fut_net },
+      trade_date,
+      top_longs:    parseCSV(longsText).map(normalizeRow),
+      top_shorts:   parseCSV(shortsText).map(normalizeRow),
+      oi_alerts:    parseCSV(alertsText).map(normalizeRow),
+      full_universe: parseCSV(universeText).map(normalizeRow),
       last_updated: new Date().toLocaleTimeString("en-IN"),
     };
   } catch (err) {
