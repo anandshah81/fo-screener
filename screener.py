@@ -1489,6 +1489,60 @@ def run_screener(trade_date: date = None) -> dict:
 
     logger.info(f"Persistent signals: {len(persistence)} stocks with 3+ day streak")
 
+    # ── Step 6c: Sector history & rotation detection ──
+    sector_history_path = os.path.join(os.path.dirname(output_path), "sector_history.csv")
+
+    # Build today's sector history rows
+    today_sector = sector_summary[["SECTOR", "AVG_SCORE", "BIAS", "LONGS", "SHORTS"]].copy()
+    today_sector.insert(0, "DATE", trade_date.strftime("%Y-%m-%d"))
+
+    if os.path.exists(sector_history_path):
+        sec_history = pd.read_csv(sector_history_path)
+        sec_history = sec_history[sec_history["DATE"] != trade_date.strftime("%Y-%m-%d")]
+        sec_history = pd.concat([sec_history, today_sector], ignore_index=True)
+    else:
+        sec_history = today_sector.copy()
+
+    sec_history.to_csv(sector_history_path, index=False)
+    logger.info(f"Sector history updated: {sec_history['DATE'].nunique()} days")
+
+    # Detect rotations vs previous trading day
+    sector_rotations = []
+    sec_history["DATE"] = pd.to_datetime(sec_history["DATE"])
+    sec_sorted = sec_history.sort_values("DATE")
+    unique_dates = sorted(sec_sorted["DATE"].unique())
+
+    if len(unique_dates) >= 2:
+        prev_date = unique_dates[-2]
+        curr_date = unique_dates[-1]
+        prev_sec  = sec_sorted[sec_sorted["DATE"] == prev_date].set_index("SECTOR")
+        curr_sec  = sec_sorted[sec_sorted["DATE"] == curr_date].set_index("SECTOR")
+
+        bias_rank = {
+            "BEARISH": -2, "MILD BEARISH": -1, "NEUTRAL": 0,
+            "MILD BULLISH": 1, "BULLISH": 2
+        }
+
+        for sector in curr_sec.index:
+            if sector not in prev_sec.index:
+                continue
+            prev_bias = prev_sec.loc[sector, "BIAS"]
+            curr_bias = curr_sec.loc[sector, "BIAS"]
+            if prev_bias != curr_bias:
+                prev_rank = bias_rank.get(prev_bias, 0)
+                curr_rank = bias_rank.get(curr_bias, 0)
+                direction = "↑" if curr_rank > prev_rank else "↓"
+                sector_rotations.append({
+                    "SECTOR":     sector,
+                    "PREV_BIAS":  prev_bias,
+                    "CURR_BIAS":  curr_bias,
+                    "DIRECTION":  direction,
+                })
+                logger.info(f"  SECTOR ROTATION: {sector} {prev_bias} → {curr_bias} {direction}")
+
+    if not sector_rotations:
+        logger.info("  No sector rotations today")
+
     # ── Step 7: Print summary ────────────────────────
     logger.info("")
     logger.info("=" * 60)
@@ -1544,6 +1598,13 @@ def run_screener(trade_date: date = None) -> dict:
             f"| {row['BIAS']:<14} {bar_l}{bar_s}"
         )
     logger.info("-" * 60)
+    if sector_rotations:
+        logger.info(f"SECTOR ROTATIONS ({len(sector_rotations)} today):")
+        for r in sector_rotations:
+            logger.info(f"  {r['SECTOR']:<18} {r['PREV_BIAS']:<14} → {r['CURR_BIAS']:<14} {r['DIRECTION']}")
+    else:
+        logger.info("SECTOR ROTATIONS: None today")
+    logger.info("-" * 60)
     if len(persistence) > 0:
         logger.info(f"PERSISTENT SIGNALS (3+ consecutive days):")
         if not persistent_longs.empty:
@@ -1576,6 +1637,7 @@ def run_screener(trade_date: date = None) -> dict:
         "persistent_longs": persistent_longs,
         "persistent_shorts": persistent_shorts,
         "persistence": persistence,
+        "sector_rotations": sector_rotations,
     }
 
 
@@ -1613,6 +1675,7 @@ if __name__ == "__main__":
                 "sector_summary": results["sector_summary"].fillna("").to_dict(orient="records"),
                 "persistent_longs": results["persistent_longs"].fillna("").to_dict(orient="records"),
                 "persistent_shorts": results["persistent_shorts"].fillna("").to_dict(orient="records"),
+                "sector_rotations": results.get("sector_rotations", []),
                 "full_universe": results["full_universe"].fillna("").to_dict(orient="records"),
             }
             json.dump(serializable, f, indent=2, default=str)

@@ -365,6 +365,9 @@
     <!-- OI Alerts -->
     <div class="section-title">⚠️ OI Alerts <span></span></div>
     <div id="home-alerts-preview"></div>
+    <!-- Sector Rotations -->
+    <div class="section-title">🔄 Sector Rotations <span></span></div>
+    <div id="home-rotations-preview"></div>
   </div>
 </div>
 
@@ -882,6 +885,20 @@ function renderAll(data) {
   document.getElementById("home-alerts-preview").innerHTML =
     `<div class="alerts-badge">⚠️ ${(data.oi_alerts||[]).length} OI Alert${(data.oi_alerts||[]).length !== 1 ? "s" : ""}</div>` +
     alerts.map(s => renderAlertCard(s)).join("");
+
+  // HOME — sector rotations preview
+  const rotations = data.sector_rotations || [];
+  document.getElementById("home-rotations-preview").innerHTML = rotations.length === 0
+    ? "<p style='color:var(--text-dim);font-size:13px'>No sector rotations today</p>"
+    : rotations.map(r => {
+        const up  = r.DIRECTION === "↑";
+        const clr = up ? "#22c55e" : "#ef4444";
+        return `<div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span style="font-weight:700;min-width:110px">${r.SECTOR}</span>
+          <span style="color:var(--text-dim)">${r.PREV_BIAS}</span>
+          <span style="color:${clr};font-weight:700">→ ${r.CURR_BIAS} ${r.DIRECTION}</span>
+        </div>`;
+      }).join("");
 
   document.getElementById("home-loading").style.display = "none";
   document.getElementById("home-content").style.display = "block";

@@ -162,6 +162,18 @@ def build_morning_brief(results: dict) -> str:
         sev_tag  = "🔥" if severity == "EXTREME" else ("⚡" if severity == "HIGH" else "•")
         lines.append(f"{sev_tag} <b>{sym}</b>: OI {oi_chg}, Px {px_chg} → {label}")
 
+    # ── Sector Rotations ─────────────────────────────
+    sector_rotations = results.get("sector_rotations", [])
+    if sector_rotations:
+        lines += ["", "🔄 <b>SECTOR ROTATIONS</b>"]
+        dir_emoji = {"↑": "🟢", "↓": "🔴"}
+        for r in sector_rotations:
+            emoji = dir_emoji.get(r.get("DIRECTION", ""), "•")
+            lines.append(
+                f"{emoji} <b>{r.get('SECTOR',''):<13}</b> "
+                f"{r.get('PREV_BIAS','')} → {r.get('CURR_BIAS','')} {r.get('DIRECTION','')}"
+            )
+
     # ── Sector Summary ───────────────────────────────
     sector_summary = results.get("sector_summary", [])
     if sector_summary:

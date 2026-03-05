@@ -320,27 +320,46 @@ def write_full_universe(ws, results: dict):
 
 
 def write_sector_summary(ws, results: dict):
-    """Write SECTOR SUMMARY tab."""
-    sectors    = results.get("sector_summary", [])
-    trade_date = results.get("trade_date", "")
-    header = ["Sector", "Avg Score", "Longs", "Shorts", "Neutral", "Total", "Bias"]
+    """Write SECTOR SUMMARY tab — sectors + rotations."""
+    sectors          = results.get("sector_summary", [])
+    sector_rotations = results.get("sector_rotations", [])
+    trade_date       = results.get("trade_date", "")
+    header = ["Sector", "Avg Score", "Longs", "Shorts", "Neutral", "Total", "Bias", "Rotation"]
+    rotation_map = {r["SECTOR"]: f"{r['PREV_BIAS']} -> {r['CURR_BIAS']} {r['DIRECTION']}"
+                    for r in sector_rotations}
     data = []
     for s in sectors:
+        sector = s.get("SECTOR", "")
         data.append([
-            s.get("SECTOR", ""),
+            sector,
             fmt_val(s.get("AVG_SCORE"), 1),
             fmt_val(s.get("LONGS"), 0),
             fmt_val(s.get("SHORTS"), 0),
             fmt_val(s.get("NEUTRAL"), 0),
             fmt_val(s.get("TOTAL"), 0),
             s.get("BIAS", "NEUTRAL"),
+            rotation_map.get(sector, ""),
         ])
-    # Add date header row above
-    all_rows = [[f"Sector Summary — {trade_date}", "", "", "", "", "", ""]] + \
-               [header] + data
+    rotation_rows = []
+    if sector_rotations:
+        rotation_rows = [
+            ["", "", "", "", "", "", "", ""],
+            [f"Sector Rotations ({len(sector_rotations)})", "", "", "", "", "", "", ""],
+            ["Sector", "Previous Bias", "->", "Current Bias", "Direction", "", "", ""],
+        ]
+        for r in sector_rotations:
+            rotation_rows.append([r.get("SECTOR",""), r.get("PREV_BIAS",""), "->",
+                                   r.get("CURR_BIAS",""), r.get("DIRECTION",""), "", "", ""])
+    else:
+        rotation_rows = [["", "", "", "", "", "", "", ""],
+                         ["No sector rotations today", "", "", "", "", "", "", ""]]
+    all_rows = [[f"Sector Summary — {trade_date}", "", "", "", "", "", "", ""]] + \
+               [header] + data + rotation_rows
     ws.clear()
     if all_rows:
         ws.update("A1", all_rows, value_input_option="USER_ENTERED")
+    logger.info(f"  SECTOR SUMMARY tab updated ({len(data)} sectors, {len(sector_rotations)} rotations)")
+
     logger.info(f"  SECTOR SUMMARY tab updated ({len(data)} sectors)")
 
     # Color bias column
