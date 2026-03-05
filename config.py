@@ -27,11 +27,13 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # GOOGLE SHEET TAB NAMES
 # ─────────────────────────────────────────────
 SHEET_TABS = {
-    "morning_brief": "MORNING BRIEF",
-    "top_longs":     "TOP LONGS",
-    "top_shorts":    "TOP SHORTS",
-    "oi_alerts":     "OI ALERTS",
-    "full_universe": "FULL UNIVERSE",
+    "morning_brief":      "MORNING BRIEF",
+    "top_longs":          "TOP LONGS",
+    "top_shorts":         "TOP SHORTS",
+    "oi_alerts":          "OI ALERTS",
+    "full_universe":      "FULL UNIVERSE",
+    "sector_summary":     "SECTOR SUMMARY",
+    "persistent_signals": "PERSISTENT SIGNALS",
 }
 
 # ─────────────────────────────────────────────
