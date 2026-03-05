@@ -342,6 +342,8 @@
   <button class="tab-btn" data-tab="longs">🟢 Longs</button>
   <button class="tab-btn" data-tab="shorts">🔴 Shorts</button>
   <button class="tab-btn" data-tab="alerts">⚠️ Alerts</button>
+  <button class="tab-btn" data-tab="sectors">🗂 Sectors</button>
+  <button class="tab-btn" data-tab="persistent">🔁 Persistent</button>
   <button class="tab-btn" data-tab="universe">🌐 Universe</button>
 </nav>
 
@@ -363,6 +365,12 @@
     <!-- OI Alerts -->
     <div class="section-title">⚠️ OI Alerts <span></span></div>
     <div id="home-alerts-preview"></div>
+    <!-- Sector Bias -->
+    <div class="section-title">🗂 Sector Bias <span></span></div>
+    <div id="home-sectors-preview"></div>
+    <!-- Persistent Signals -->
+    <div class="section-title">🔁 Persistent Signals <span></span></div>
+    <div id="home-persistent-preview"></div>
   </div>
 </div>
 
@@ -393,6 +401,19 @@
 <!-- ALERTS TAB -->
 <div id="tab-alerts" class="tab-content">
   <div id="alerts-list"></div>
+</div>
+
+<!-- SECTORS TAB -->
+<div id="tab-sectors" class="tab-content">
+  <div id="sectors-container"></div>
+</div>
+
+<!-- PERSISTENT TAB -->
+<div id="tab-persistent" class="tab-content">
+  <div class="section-title">🟢 Persistent Longs <span></span></div>
+  <div id="persistent-longs-container"></div>
+  <div class="section-title" style="margin-top:16px">🔴 Persistent Shorts <span></span></div>
+  <div id="persistent-shorts-container"></div>
 </div>
 
 <!-- UNIVERSE TAB -->
@@ -829,6 +850,38 @@ function renderAll(data) {
     `<div class="alerts-badge">⚠️ ${(data.oi_alerts||[]).length} OI Alert${(data.oi_alerts||[]).length !== 1 ? "s" : ""}</div>` +
     alerts.map(s => renderAlertCard(s)).join("");
 
+  // HOME — sector preview (top 6 by absolute avg score)
+  const sectors = (data.sector_summary || []);
+  const biasClr = {"BULLISH":"#22c55e","MILD BULLISH":"#86efac","NEUTRAL":"#94a3b8","MILD BEARISH":"#fb923c","BEARISH":"#ef4444"};
+  document.getElementById("home-sectors-preview").innerHTML = sectors.length === 0
+    ? "<p style='color:var(--text-dim);font-size:13px'>No sector data</p>"
+    : sectors.slice(0,6).map(s => {
+        const avg = parseFloat(s.AVG_SCORE||0), clr = biasClr[s.BIAS]||"#94a3b8";
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span style="font-weight:600;min-width:110px">${s.SECTOR}</span>
+          <span style="color:${avg>=0?'#22c55e':'#ef4444'}">${avg>=0?'+':''}${avg.toFixed(1)}</span>
+          <span style="color:${clr};font-weight:600">${s.BIAS}</span>
+          <span style="color:var(--text-dim)">L:${s.LONGS} S:${s.SHORTS}</span>
+        </div>`;
+      }).join("");
+
+  // HOME — persistent preview
+  const pL = (data.persistent_longs||[]).slice(0,3);
+  const pS = (data.persistent_shorts||[]).slice(0,3);
+  const allP = [...pL.map(s=>({...s,_d:"long"})),...pS.map(s=>({...s,_d:"short"}))];
+  document.getElementById("home-persistent-preview").innerHTML = allP.length === 0
+    ? "<p style='color:var(--text-dim);font-size:13px'>Building history — need 3+ days</p>"
+    : allP.map(s => {
+        const clr = s._d==="long"?"#22c55e":"#ef4444";
+        const sc  = parseInt(s.COMPOSITE_SCORE||0);
+        return `<div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span style="font-weight:700;min-width:90px">${s.SYMBOL}</span>
+          <span style="background:${clr};color:#000;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:700">P${s.PERSISTENCE}d</span>
+          <span style="color:${clr}">${sc>=0?'+':''}${sc}</span>
+          <span style="color:var(--text-dim);font-size:12px">${s.SIGNAL||""}</span>
+        </div>`;
+      }).join("");
+
   document.getElementById("home-loading").style.display = "none";
   document.getElementById("home-content").style.display = "block";
 
@@ -854,8 +907,64 @@ function renderAll(data) {
     `<div class="section-title">⚠️ OI Alerts (${allAlerts.length}) <span></span></div>` +
     (allAlerts.map(s => renderAlertCard(s)).join("") || "<p style='color:var(--text-dim)'>No OI alerts today</p>");
 
+  // SECTORS TAB
+  renderSectors(sectors);
+
+  // PERSISTENT TAB
+  renderPersistent(data.persistent_longs||[], data.persistent_shorts||[]);
+
   // UNIVERSE
   renderUniverse();
+}
+
+function renderSectors(sectors) {
+  const biasClr = {"BULLISH":"#22c55e","MILD BULLISH":"#86efac","NEUTRAL":"#94a3b8","MILD BEARISH":"#fb923c","BEARISH":"#ef4444"};
+  document.getElementById("sectors-container").innerHTML = sectors.length === 0
+    ? "<p style='color:var(--text-dim)'>No sector data available</p>"
+    : `<table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="color:var(--text-dim);text-align:left;border-bottom:1px solid var(--border)">
+          <th style="padding:10px 6px">Sector</th>
+          <th style="padding:10px 6px;text-align:center">Avg</th>
+          <th style="padding:10px 6px;text-align:center">L</th>
+          <th style="padding:10px 6px;text-align:center">S</th>
+          <th style="padding:10px 6px;text-align:center">N</th>
+          <th style="padding:10px 6px">Bias</th>
+        </tr></thead>
+        <tbody>
+          ${sectors.map(s => {
+            const avg = parseFloat(s.AVG_SCORE||0);
+            const clr = biasClr[s.BIAS]||"#94a3b8";
+            return `<tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:10px 6px;font-weight:600">${s.SECTOR}</td>
+              <td style="padding:10px 6px;text-align:center;color:${avg>=0?'#22c55e':'#ef4444'}">${avg>=0?'+':''}${avg.toFixed(1)}</td>
+              <td style="padding:10px 6px;text-align:center;color:#22c55e;font-weight:600">${s.LONGS}</td>
+              <td style="padding:10px 6px;text-align:center;color:#ef4444;font-weight:600">${s.SHORTS}</td>
+              <td style="padding:10px 6px;text-align:center;color:var(--text-dim)">${s.NEUTRAL}</td>
+              <td style="padding:10px 6px;color:${clr};font-weight:600">${s.BIAS}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>`;
+}
+
+function renderPersistent(longs, shorts) {
+  const fmt = (stocks, type) => {
+    const clr = type==="long"?"#22c55e":"#ef4444";
+    return stocks.length === 0
+      ? `<p style='color:var(--text-dim)'>No persistent ${type}s yet — need 3+ days of history</p>`
+      : stocks.map(s => {
+          const sc = parseInt(s.COMPOSITE_SCORE||0);
+          return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
+            <div style="font-weight:700;font-size:15px;min-width:110px">${s.SYMBOL}</div>
+            <div style="background:${clr};color:#000;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700">P${s.PERSISTENCE}d</div>
+            <div style="color:${clr};font-weight:600">${sc>=0?'+':''}${sc}</div>
+            <div style="color:var(--text-dim);font-size:12px">${s.SIGNAL||""}</div>
+            <div style="color:var(--text-dim);font-size:12px;margin-left:auto">${s.RS_SIGNAL||""}</div>
+          </div>`;
+        }).join("");
+  };
+  document.getElementById("persistent-longs-container").innerHTML  = fmt(longs,  "long");
+  document.getElementById("persistent-shorts-container").innerHTML = fmt(shorts, "short");
 }
 
 function renderUniverse(filter = "", sortBy = "composite") {

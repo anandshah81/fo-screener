@@ -139,7 +139,7 @@ def build_morning_brief(results: dict) -> str:
         signal = s.get("OI_SIGNAL", "N/A")
         oi_chg = fmt_pct(s.get("OI_CHANGE_PCT"))
         lines.append(
-            f"{i}. <b>{sym}</b> | {score}/18 | {signal} | OI {oi_chg}"
+            f"{i}. <b>{sym}</b> | {score}/27 | {signal} | OI {oi_chg}"
         )
 
     lines += ["", "🔴 <b>TOP 5 SHORTS</b>"]
@@ -149,18 +149,58 @@ def build_morning_brief(results: dict) -> str:
         signal = s.get("OI_SIGNAL", "N/A")
         oi_chg = fmt_pct(s.get("OI_CHANGE_PCT"))
         lines.append(
-            f"{i}. <b>{sym}</b> | {score}/18 | {signal} | OI {oi_chg}"
+            f"{i}. <b>{sym}</b> | {score}/27 | {signal} | OI {oi_chg}"
         )
 
     lines += ["", f"⚠️ <b>OI ALERTS ({len(oi_alerts)})</b>"]
-    for s in sorted(oi_alerts, key=lambda x: abs(x.get("OI_CHANGE_PCT") or 0), reverse=True)[:8]:
-        sym = s.get("SYMBOL", "N/A")
-        oi_chg = fmt_pct(s.get("OI_CHANGE_PCT"))
-        px_chg = fmt_pct(s.get("PRICE_CHANGE_PCT"))
-        signal = s.get("OI_SIGNAL", "N/A")
+    for s in sorted(oi_alerts, key=lambda x: abs(x.get("OI_CHANGE_PCT") or 0), reverse=True)[:5]:
+        sym      = s.get("SYMBOL", "N/A")
+        oi_chg   = fmt_pct(s.get("OI_CHANGE_PCT"))
+        px_chg   = fmt_pct(s.get("PRICE_CHANGE_PCT"))
         severity = s.get("ALERT_SEVERITY", "")
-        sev_tag = "🔥" if severity == "HIGH" else "⚡"
-        lines.append(f"{sev_tag} <b>{sym}</b>: OI {oi_chg}, Price {px_chg} → {signal}")
+        label    = s.get("ALERT_LABEL", s.get("OI_SIGNAL", "N/A"))
+        sev_tag  = "🔥" if severity == "EXTREME" else ("⚡" if severity == "HIGH" else "•")
+        lines.append(f"{sev_tag} <b>{sym}</b>: OI {oi_chg}, Px {px_chg} → {label}")
+
+    # ── Sector Summary ───────────────────────────────
+    sector_summary = results.get("sector_summary", [])
+    if sector_summary:
+        bias_emoji = {
+            "BULLISH":      "🟢",
+            "MILD BULLISH": "🟩",
+            "NEUTRAL":      "⬜",
+            "MILD BEARISH": "🟧",
+            "BEARISH":      "🔴",
+        }
+        lines += ["", "🗂 <b>SECTOR BIAS</b>"]
+        for sec in sector_summary:
+            avg    = float(sec.get("AVG_SCORE", 0))
+            bias   = sec.get("BIAS", "NEUTRAL")
+            emoji  = bias_emoji.get(bias, "⬜")
+            sign   = "+" if avg >= 0 else ""
+            longs  = sec.get("LONGS", 0)
+            shorts = sec.get("SHORTS", 0)
+            lines.append(
+                f"{emoji} <b>{sec.get('SECTOR',''):<13}</b> {sign}{avg:.1f} | L:{longs} S:{shorts}"
+            )
+
+    # ── Persistent Signals ───────────────────────────
+    persistent_longs  = results.get("persistent_longs",  [])
+    persistent_shorts = results.get("persistent_shorts", [])
+    if persistent_longs or persistent_shorts:
+        lines += ["", "🔁 <b>PERSISTENT SIGNALS (3+ days)</b>"]
+        for s in persistent_longs[:5]:
+            streak = int(s.get("PERSISTENCE", 0))
+            score  = fmt_score(s.get("COMPOSITE_SCORE", 0))
+            rs     = s.get("RS_SIGNAL", "")
+            lines.append(f"  🟢 <b>{s.get('SYMBOL','')}</b> [P{streak}d] Score:{score} | {rs}")
+        for s in persistent_shorts[:5]:
+            streak = int(s.get("PERSISTENCE", 0))
+            score  = fmt_score(s.get("COMPOSITE_SCORE", 0))
+            rs     = s.get("RS_SIGNAL", "")
+            lines.append(f"  🔴 <b>{s.get('SYMBOL','')}</b> [P{streak}d] Score:{score} | {rs}")
+    else:
+        lines += ["", "🔁 <b>PERSISTENT SIGNALS:</b> Building history..."]
 
     lines += [
         "",
