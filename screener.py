@@ -72,11 +72,15 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 
 def last_trading_day(ref_date: date = None) -> date:
-    """Return the most recent NSE trading day (skip weekends + holidays)."""
+    """
+    Return the most recent COMPLETED NSE trading day.
+    When called automatically (no ref_date), always starts from YESTERDAY
+    because bhavcopy is only available after ~6 PM IST on the trading day.
+    When called with an explicit --date flag, uses that date directly.
+    """
     if ref_date is None:
-        ref_date = date.today()
+        ref_date = date.today() - timedelta(days=1)
     d = ref_date
-    # If called in the morning before market open, look back one day
     while True:
         if d.weekday() < 5 and d.isoformat() not in NSE_HOLIDAYS:
             return d

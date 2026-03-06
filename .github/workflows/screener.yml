@@ -3,7 +3,7 @@ name: F&O Morning Screener
 on:
   schedule:
     # 6:30 AM IST = 01:00 UTC, Monday–Friday
-    - cron: '30 1 * * 1-5'
+    - cron: '0 0 * * 2-6'
   workflow_dispatch:
     inputs:
       date:
