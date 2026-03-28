@@ -431,11 +431,13 @@ function sheetCsvUrl(gid) {
 // Tab GIDs (find these in the Google Sheet URL when you click each tab)
 // Format: &gid=XXXXXXXX
 const TAB_GIDS = {
-  morning_brief: "0",          // First tab is usually 0
-  top_longs:     "1",          // Update after creating sheet
-  top_shorts:    "2",
-  oi_alerts:     "3",
-  full_universe: "4",
+  morning_brief:      "805186472",
+  top_longs:          "2059154994",
+  top_shorts:         "1932997497",
+  oi_alerts:          "518132719",
+  full_universe:      "1749352389",
+  sector_summary:     "1443381125",
+  persistent_signals: "1787108931",
 };
 
 // ─── STATE ──────────────────────────────────────────────────────
@@ -499,33 +501,80 @@ function parseCSV(text) {
 }
 
 // ─── DATA FETCHING ───────────────────────────────────────────────
+function normalizeRow(row) {
+  return {
+    SYMBOL:           row["Stock"]              || row["SYMBOL"]           || "",
+    COMPOSITE_SCORE:  row["Score"]              || row["COMPOSITE_SCORE"]  || 0,
+    TECHNICAL_SCORE:  row["Tech Score"]         || row["TECHNICAL_SCORE"]  || 0,
+    FO_SCORE:         row["F&O Score"]          || row["FO_SCORE"]         || 0,
+    RS_SCORE:         row["RS Score"]           || row["RS_SCORE"]         || 0,
+    SIGNAL:           row["Signal"]             || row["SIGNAL"]           || "",
+    OI_SIGNAL:        row["OI Signal"]          || row["OI_SIGNAL"]        || "",
+    OI_CHANGE_PCT:    row["OI Change %"]        || row["OI_CHANGE_PCT"]    || null,
+    PRICE_CHANGE_PCT: row["Price Change %"]     || row["PRICE_CHANGE_PCT"] || null,
+    DELIVERY_PCT:     row["Delivery %"]         || row["DELIVERY_PCT"]     || null,
+    ADX:              row["ADX"]                || null,
+    RSI:              row["RSI"]                || null,
+    MACD_SIGNAL:      row["MACD"]               || row["MACD_SIGNAL"]      || "",
+    EMA_SIGNAL:       row["EMA Alignment"]      || row["EMA_SIGNAL"]       || "",
+    SUPERTREND_SIGNAL:row["Supertrend"]         || row["SUPERTREND_SIGNAL"]|| "",
+    BB_SIGNAL:        row["BB Signal"]          || row["BB_SIGNAL"]        || "",
+    BREAKOUT_SIGNAL:  row["Breakout"]           || row["BREAKOUT_SIGNAL"]  || "",
+    VOLUME_RATIO:     row["Volume Ratio"]       || row["VOLUME_RATIO"]     || null,
+    PCR:              row["PCR"]                || null,
+    RS_PCT:           row["RS %ile"]            || row["RS_PCT"]           || null,
+    RS_SIGNAL:        row["RS Signal"]          || row["RS_SIGNAL"]        || "",
+    RANK:             row["Rank"]               || row["RANK"]             || 0,
+    ALERT_SEVERITY:   row["Alert Severity"]     || row["ALERT_SEVERITY"]   || "MEDIUM",
+    ALERT_LABEL:      row["Alert Label"]        || row["ALERT_LABEL"]      || "",
+    ENTRY_SIGNAL:         row["Entry Signal"]        || "",
+    ENTRY_SCORE:          row["Entry Score"]          || 0,
+    ENTRY_CONFIRMATIONS:  row["Entry Confirmations"]  || "",
+    NR_SIGNAL:            row["NR Signal"]            || "",
+    RSI_DIV_SIGNAL:       row["RSI Divergence"]       || "",
+    CANDLE_PATTERN:       row["Candle Pattern"]        || "",
+    PIVOT:                row["Pivot"]                || null,
+    PIVOT_R1:             row["R1"]                   || null,
+    PIVOT_S1:             row["S1"]                   || null,
+    PIVOT_POSITION:       row["Pivot Position"]       || "",
+  };
+}
+
 async function fetchSheetData() {
   if (SHEET_ID === "YOUR_GOOGLE_SHEET_ID_HERE") {
     return getDemoData();
   }
 
   try {
-    const [longsResp, shortsResp, alertsResp, universeResp] = await Promise.all([
+    const [longsResp, shortsResp, alertsResp, universeResp, briefResp] = await Promise.all([
       fetch(sheetCsvUrl(TAB_GIDS.top_longs)),
       fetch(sheetCsvUrl(TAB_GIDS.top_shorts)),
       fetch(sheetCsvUrl(TAB_GIDS.oi_alerts)),
       fetch(sheetCsvUrl(TAB_GIDS.full_universe)),
+      fetch(sheetCsvUrl(TAB_GIDS.morning_brief)),
     ]);
 
-    const [longsText, shortsText, alertsText, universeText] = await Promise.all([
-      longsResp.text(), shortsResp.text(), alertsResp.text(), universeResp.text(),
+    const [longsText, shortsText, alertsText, universeText, briefText] = await Promise.all([
+      longsResp.text(), shortsResp.text(), alertsResp.text(), universeResp.text(), briefResp.text(),
     ]);
 
-    // Fetch brief for macro
-    const briefResp = await fetch(sheetCsvUrl(TAB_GIDS.morning_brief));
-    const briefText = await briefResp.text();
+    // Parse macro from brief CSV
+    const briefLines = briefText.split("\n");
+    let market_bias = "NEUTRAL", fii_index_fut_net = 0, trade_date = "";
+    briefLines.forEach(line => {
+      if (line.includes("Market Bias:")) { const m = line.match(/BULLISH|BEARISH|NEUTRAL/); if (m) market_bias = m[0]; }
+      if (line.includes("FII Index Futures:")) { const m = line.match(/([\d,]+)/); if (m) fii_index_fut_net = line.includes("SHORT") ? -parseInt(m[1].replace(/,/g,"")) : parseInt(m[1].replace(/,/g,"")); }
+      if (line.includes("Date:")) { const m = line.match(/Date:,([^,]+)/); if (m) trade_date = m[1].trim(); }
+    });
 
     return {
       brief: briefText,
-      top_longs:    parseCSV(longsText),
-      top_shorts:   parseCSV(shortsText),
-      oi_alerts:    parseCSV(alertsText),
-      full_universe: parseCSV(universeText),
+      macro: { market_bias, fii_index_fut_net },
+      trade_date,
+      top_longs:    parseCSV(longsText).map(normalizeRow),
+      top_shorts:   parseCSV(shortsText).map(normalizeRow),
+      oi_alerts:    parseCSV(alertsText).map(normalizeRow),
+      full_universe: parseCSV(universeText).map(normalizeRow),
       last_updated: new Date().toLocaleTimeString("en-IN"),
     };
   } catch (err) {
@@ -639,13 +688,6 @@ function renderStockCard(stock, type = "long", compact = false) {
   const macd  = stock.MACD_SIGNAL || "";
   const st    = stock.SUPERTREND_SIGNAL || "";
   const dlv   = parseFloat(stock.DELIVERY_PCT);
-  const entrySignal    = stock.ENTRY_SIGNAL || stock["Entry Signal"] || "";
-  const confirmations  = stock.ENTRY_CONFIRMATIONS || stock["Entry Confirmations"] || "";
-  const pivot          = stock.PIVOT || stock["Pivot"] || null;
-  const pivotR1        = stock.PIVOT_R1 || stock["R1"] || null;
-  const pivotS1        = stock.PIVOT_S1 || stock["S1"] || null;
-  const nrSignal       = stock.NR_SIGNAL || stock["NR Signal"] || "";
-  const candle         = stock.CANDLE_PATTERN || stock["Candle Pattern"] || "";
 
   const barW = scoreBarWidth(cs);
   const barCls = cs >= 0 ? "positive" : "negative";
@@ -693,22 +735,7 @@ function renderStockCard(stock, type = "long", compact = false) {
         ${valChip("RSI", isNaN(rsi) ? "—" : rsi.toFixed(0))}
         ${valChip("ADX", isNaN(adx) ? "—" : adx.toFixed(0))}
         ${valChip("Vol", isNaN(vol) ? "—" : vol.toFixed(1) + "×")}
-        ${nrSignal && nrSignal !== "NO NR" && nrSignal !== "N/A" ? `<span class="tech-chip ok">🎯 ${nrSignal}</span>` : ""}
-        ${candle && candle !== "NONE" && candle !== "N/A" ? `<span class="tech-chip ok">🕯 ${candle}</span>` : ""}
-      </div>
-      ${entrySignal && entrySignal !== "NO SIGNAL" && entrySignal !== "NO ENTRY" ? `
-        <div style="margin-top:8px;padding:7px 10px;border-radius:6px;font-size:11px;font-weight:700;
-          background:${entrySignal.includes('STRONG') ? (type==='long'?'rgba(0,184,148,0.2)':'rgba(225,112,85,0.2)') : 'rgba(136,136,170,0.08)'};
-          color:${entrySignal.includes('STRONG') ? (type==='long'?'var(--green)':'var(--red)') : 'var(--text-dim)'};
-          border:1px solid ${entrySignal.includes('STRONG') ? (type==='long'?'rgba(0,184,148,0.4)':'rgba(225,112,85,0.4)') : 'var(--border)'}">
-          🎯 ${entrySignal}${confirmations ? '<br><span style=\'font-weight:400;opacity:0.8\'>' + confirmations + '</span>' : ''}
-        </div>` : ""}
-      ${(pivotS1 || pivotR1) ? `
-        <div style="margin-top:6px;display:flex;gap:12px;font-size:11px;color:var(--text-dim);padding:4px 2px">
-          ${pivotS1 ? `<span>🟢 S1 <b style="color:var(--green)">${parseFloat(pivotS1).toFixed(1)}</b></span>` : ""}
-          ${pivot ? `<span>⬜ Pvt <b style="color:var(--text)">${parseFloat(pivot).toFixed(1)}</b></span>` : ""}
-          ${pivotR1 ? `<span>🔴 R1 <b style="color:var(--red)">${parseFloat(pivotR1).toFixed(1)}</b></span>` : ""}
-        </div>` : ""}` : ""}
+      </div>` : ""}
     </div>
   `;
 }
