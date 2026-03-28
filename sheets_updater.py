@@ -381,6 +381,19 @@ def apply_color_formatting(client, spreadsheet_id, results):
         logger.warning(f"  Color formatting failed (non-critical): {e}")
 
 
+def write_signal_history(ws, results):
+    """Write SIGNAL HISTORY tab — accumulates across runs for persistence tracking."""
+    history = results.get("signal_history", [])
+    if not history:
+        return
+    header = ["DATE", "SYMBOL", "COMPOSITE_SCORE", "SIGNAL", "RS_PCT"]
+    data = [[r.get("DATE",""), r.get("SYMBOL",""),
+             fmt_val(r.get("COMPOSITE_SCORE"),0), r.get("SIGNAL",""),
+             fmt_val(r.get("RS_PCT"),1)] for r in history]
+    clear_and_write(ws, data, header_row=header)
+    logger.info(f"  SIGNAL HISTORY tab updated ({len(data)} rows)")
+
+
 def update_sheets(results=None, json_path=None):
     if results is None:
         if json_path is None:
@@ -410,6 +423,7 @@ def update_sheets(results=None, json_path=None):
         "full_universe":      write_full_universe,
         "sector_summary":     write_sector_summary,
         "persistent_signals": write_persistent_signals,
+        "signal_history":     write_signal_history,
     }
     for tab_key, writer_fn in tab_writers.items():
         tab_name = SHEET_TABS[tab_key]

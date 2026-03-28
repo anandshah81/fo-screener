@@ -769,153 +769,6 @@ def compute_breakout(df: pd.DataFrame, vol_ratio: float) -> dict:
     }
 
 
-
-def compute_nr7(df):
-    """NR7/NR4: Narrowest range in 7/4 days — coiled spring signal."""
-    high  = df["High"]
-    low   = df["Low"]
-    close = df["Close"]
-    if len(df) < 7:
-        return {"score": 0, "signal": "N/A", "is_nr7": False, "is_nr4": False, "range_pct": None}
-    daily_range = high - low
-    last_range  = daily_range.iloc[-1]
-    is_nr7 = bool(last_range == daily_range.iloc[-7:].min())
-    is_nr4 = bool(last_range == daily_range.iloc[-4:].min())
-    range_pct = round(last_range / close.iloc[-1] * 100, 2)
-    midpoint  = (high.iloc[-1] + low.iloc[-1]) / 2
-    bull_bias = close.iloc[-1] > midpoint
-    if is_nr7:
-        score  = 1 if bull_bias else -1
-        signal = "NR7 BULL COIL" if bull_bias else "NR7 BEAR COIL"
-    elif is_nr4:
-        score  = 1 if bull_bias else -1
-        signal = "NR4 BULL COIL" if bull_bias else "NR4 BEAR COIL"
-    else:
-        score  = 0
-        signal = "NO NR"
-    return {"score": score, "signal": signal, "is_nr7": is_nr7, "is_nr4": is_nr4, "range_pct": range_pct}
-
-
-def compute_rsi_divergence(close, rsi, lookback=14):
-    """RSI Divergence: price vs RSI disagreement signals reversal."""
-    if len(close) < lookback + 2 or len(rsi) < lookback + 2:
-        return {"score": 0, "signal": "NO DIVERGENCE", "type": None}
-    price_window = close.iloc[-(lookback + 1):]
-    rsi_window   = rsi.iloc[-(lookback + 1):]
-    price_lows, rsi_lows, price_highs, rsi_highs = [], [], [], []
-    for i in range(1, len(price_window) - 1):
-        p = price_window.iloc[i]
-        r = rsi_window.iloc[i]
-        if p < price_window.iloc[i-1] and p < price_window.iloc[i+1]:
-            price_lows.append(p); rsi_lows.append(r)
-        if p > price_window.iloc[i-1] and p > price_window.iloc[i+1]:
-            price_highs.append(p); rsi_highs.append(r)
-    bullish_div = (len(price_lows) >= 2 and price_lows[-1] < price_lows[-2] and rsi_lows[-1] > rsi_lows[-2])
-    bearish_div = (len(price_highs) >= 2 and price_highs[-1] > price_highs[-2] and rsi_highs[-1] < rsi_highs[-2])
-    if bullish_div:
-        return {"score": 2, "signal": "BULLISH DIVERGENCE", "type": "BULLISH"}
-    elif bearish_div:
-        return {"score": -2, "signal": "BEARISH DIVERGENCE", "type": "BEARISH"}
-    return {"score": 0, "signal": "NO DIVERGENCE", "type": None}
-
-
-def compute_pivot_points(df):
-    """Standard pivot points from previous day OHLC — entry and SL levels."""
-    if len(df) < 2:
-        return {}
-    prev  = df.iloc[-2]
-    h, l, c = float(prev["High"]), float(prev["Low"]), float(prev["Close"])
-    pivot = (h + l + c) / 3
-    r1 = 2 * pivot - l;  r2 = pivot + (h - l)
-    s1 = 2 * pivot - h;  s2 = pivot - (h - l)
-    last_close = float(df["Close"].iloc[-1])
-    if last_close > r2:      position, bias = "ABOVE R2",    "VERY BULLISH"
-    elif last_close > r1:    position, bias = "ABOVE R1",    "BULLISH"
-    elif last_close > pivot: position, bias = "ABOVE PIVOT", "MILD BULLISH"
-    elif last_close > s1:    position, bias = "BELOW PIVOT", "MILD BEARISH"
-    elif last_close > s2:    position, bias = "NEAR S1",     "BEARISH"
-    else:                    position, bias = "BELOW S2",    "VERY BEARISH"
-    return {
-        "pivot": round(pivot, 2), "r1": round(r1, 2), "r2": round(r2, 2),
-        "s1": round(s1, 2), "s2": round(s2, 2),
-        "position": position, "bias": bias,
-        "dist_to_r1_pct": round((r1 - last_close) / last_close * 100, 2),
-        "dist_to_s1_pct": round((last_close - s1) / last_close * 100, 2),
-    }
-
-
-def compute_candlestick_pattern(df):
-    """Detect key reversal candle patterns on the last bar."""
-    if len(df) < 2:
-        return {"score": 0, "signal": "NONE", "pattern": None}
-    o1, h1, l1, c1 = float(df["Open"].iloc[-1]), float(df["High"].iloc[-1]), float(df["Low"].iloc[-1]), float(df["Close"].iloc[-1])
-    o2, h2, l2, c2 = float(df["Open"].iloc[-2]), float(df["High"].iloc[-2]), float(df["Low"].iloc[-2]), float(df["Close"].iloc[-2])
-    body1 = abs(c1 - o1); full_range1 = h1 - l1
-    upper_wick1 = h1 - max(o1, c1); lower_wick1 = min(o1, c1) - l1
-    body2 = abs(c2 - o2)
-    is_bull1 = c1 > o1; is_bear1 = c1 < o1; is_bull2 = c2 > o2
-    if full_range1 == 0:
-        return {"score": 0, "signal": "NONE", "pattern": None}
-    body_pct  = body1 / full_range1
-    upper_pct = upper_wick1 / full_range1
-    lower_pct = lower_wick1 / full_range1
-    if body_pct < 0.10:
-        return {"score": 0, "signal": "DOJI", "pattern": "DOJI"}
-    if body_pct > 0.90:
-        s = 1 if is_bull1 else -1
-        sig = "BULL MARUBOZU" if is_bull1 else "BEAR MARUBOZU"
-        return {"score": s, "signal": sig, "pattern": sig}
-    if lower_pct > 0.55 and upper_pct < 0.15:
-        return {"score": 1, "signal": "HAMMER", "pattern": "HAMMER"}
-    if upper_pct > 0.55 and lower_pct < 0.15:
-        return {"score": -1, "signal": "SHOOTING STAR", "pattern": "SHOOTING STAR"}
-    if is_bull1 and not is_bull2 and c1 > o2 and o1 < c2 and body1 > body2:
-        return {"score": 1, "signal": "BULL ENGULFING", "pattern": "BULL ENGULFING"}
-    if is_bear1 and is_bull2 and o1 > c2 and c1 < o2 and body1 > body2:
-        return {"score": -1, "signal": "BEAR ENGULFING", "pattern": "BEAR ENGULFING"}
-    return {"score": 0, "signal": "NONE", "pattern": None}
-
-
-def compute_entry_signal(components, fo_signal, composite_score):
-    """
-    Combine NR7 + RSI Divergence + Pivot + Candlestick + BB Squeeze + OI
-    into a single ENTRY_SIGNAL with confirmation count.
-    STRONG ENTRY = 3+ confirmations, WATCH = 1-2, NO ENTRY = 0.
-    """
-    confirmations = []
-    if composite_score >= 12:
-        direction = "LONG"
-    elif composite_score <= -12:
-        direction = "SHORT"
-    else:
-        return {"entry_signal": "NO SIGNAL", "entry_score": 0, "entry_confirmations": []}
-    nr     = components.get("NR7", {})
-    div    = components.get("RSI_DIV", {})
-    candle = components.get("CANDLE", {})
-    pivot  = components.get("PIVOT", {})
-    bb     = components.get("BOLLINGER", {})
-    nr_signal = nr.get("signal", "")
-    if direction == "LONG"  and "BULL COIL" in nr_signal: confirmations.append("NR7 COIL")
-    if direction == "SHORT" and "BEAR COIL" in nr_signal: confirmations.append("NR7 COIL")
-    div_type = div.get("type")
-    if direction == "LONG"  and div_type == "BULLISH": confirmations.append("RSI DIV")
-    if direction == "SHORT" and div_type == "BEARISH": confirmations.append("RSI DIV")
-    candle_score = candle.get("score", 0); candle_sig = candle.get("signal", "NONE")
-    if direction == "LONG"  and candle_score > 0 and candle_sig != "NONE": confirmations.append(f"CANDLE:{candle_sig}")
-    if direction == "SHORT" and candle_score < 0 and candle_sig != "NONE": confirmations.append(f"CANDLE:{candle_sig}")
-    pivot_bias = pivot.get("bias", "")
-    if direction == "LONG"  and "BULLISH" in pivot_bias: confirmations.append("PIVOT BULL")
-    if direction == "SHORT" and "BEARISH" in pivot_bias: confirmations.append("PIVOT BEAR")
-    if bb.get("squeeze", False): confirmations.append("BB SQUEEZE")
-    if direction == "LONG"  and fo_signal in ("LONG BUILDUP", "SHORT COVERING"):  confirmations.append(f"OI:{fo_signal}")
-    if direction == "SHORT" and fo_signal in ("SHORT BUILDUP", "LONG UNWINDING"): confirmations.append(f"OI:{fo_signal}")
-    n = len(confirmations)
-    if n >= 3:   entry_signal = f"STRONG {direction} ENTRY"
-    elif n >= 1: entry_signal = f"WATCH {direction}"
-    else:        entry_signal = "NO ENTRY"
-    return {"entry_signal": entry_signal, "entry_score": n, "entry_confirmations": confirmations}
-
-
 def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     """
     Calculate all technical indicators for a single stock.
@@ -1111,56 +964,6 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         bo = {"score": 0, "signal": "N/A"}
         components["BREAKOUT"] = bo
 
-    # ── NR7 / NR4 ──────────────────────────────────
-    try:
-        nr = compute_nr7(df)
-        score += nr["score"]
-        components["NR7"] = nr
-        indicators["NR_SIGNAL"]   = nr["signal"]
-        indicators["NR_RANGE_PCT"] = nr["range_pct"]
-    except Exception as e:
-        logger.debug(f"NR7 error: {e}")
-        nr = {"score": 0, "signal": "N/A"}
-        components["NR7"] = nr
-
-    # ── RSI Divergence ──────────────────────────────
-    try:
-        rsi_div = compute_rsi_divergence(close, rsi)
-        score += rsi_div["score"]
-        components["RSI_DIV"] = rsi_div
-        indicators["RSI_DIV_SIGNAL"] = rsi_div["signal"]
-    except Exception as e:
-        logger.debug(f"RSI divergence error: {e}")
-        rsi_div = {"score": 0, "signal": "N/A", "type": None}
-        components["RSI_DIV"] = rsi_div
-
-    # ── Pivot Points ────────────────────────────────
-    try:
-        pivot = compute_pivot_points(df)
-        components["PIVOT"] = pivot
-        indicators["PIVOT"]          = pivot.get("pivot")
-        indicators["PIVOT_R1"]       = pivot.get("r1")
-        indicators["PIVOT_R2"]       = pivot.get("r2")
-        indicators["PIVOT_S1"]       = pivot.get("s1")
-        indicators["PIVOT_S2"]       = pivot.get("s2")
-        indicators["PIVOT_POSITION"] = pivot.get("position")
-        indicators["PIVOT_BIAS"]     = pivot.get("bias")
-    except Exception as e:
-        logger.debug(f"Pivot error: {e}")
-        pivot = {}
-        components["PIVOT"] = pivot
-
-    # ── Candlestick Pattern ─────────────────────────
-    try:
-        candle = compute_candlestick_pattern(df)
-        score += candle["score"]
-        components["CANDLE"] = candle
-        indicators["CANDLE_PATTERN"] = candle["signal"]
-    except Exception as e:
-        logger.debug(f"Candle error: {e}")
-        candle = {"score": 0, "signal": "NONE"}
-        components["CANDLE"] = candle
-
     indicators["PRICE"] = round(last_close, 2)
     indicators["PRICE_CHANGE_PCT"] = round(
         (last_close - close.iloc[-2]) / close.iloc[-2] * 100, 2
@@ -1174,9 +977,6 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         "bb_signal":  components["BOLLINGER"]["signal"],
         "bb_squeeze": components["BOLLINGER"]["squeeze"],
         "breakout_signal": components["BREAKOUT"]["signal"],
-        "nr_signal":       components["NR7"]["signal"],
-        "rsi_div_signal":  components["RSI_DIV"]["signal"],
-        "candle_signal":   components["CANDLE"]["signal"],
     }
 
 
@@ -1541,38 +1341,7 @@ def run_screener(trade_date: date = None) -> dict:
                 "DIST_FROM_52W_LOW":  tech["indicators"].get("DIST_FROM_52W_LOW") if tech else None,
                 "W52_HIGH":           tech["indicators"].get("W52_HIGH") if tech else None,
                 "W52_LOW":            tech["indicators"].get("W52_LOW") if tech else None,
-                # NR7 / Coil
-                "NR_SIGNAL":   tech.get("nr_signal", "N/A") if tech else "N/A",
-                "NR_RANGE_PCT": tech["indicators"].get("NR_RANGE_PCT") if tech else None,
-                # RSI Divergence
-                "RSI_DIV_SIGNAL": tech.get("rsi_div_signal", "NO DIVERGENCE") if tech else "N/A",
-                # Candlestick
-                "CANDLE_PATTERN": tech.get("candle_signal", "NONE") if tech else "N/A",
-                # Pivot Points
-                "PIVOT":          tech["indicators"].get("PIVOT") if tech else None,
-                "PIVOT_R1":       tech["indicators"].get("PIVOT_R1") if tech else None,
-                "PIVOT_R2":       tech["indicators"].get("PIVOT_R2") if tech else None,
-                "PIVOT_S1":       tech["indicators"].get("PIVOT_S1") if tech else None,
-                "PIVOT_S2":       tech["indicators"].get("PIVOT_S2") if tech else None,
-                "PIVOT_POSITION": tech["indicators"].get("PIVOT_POSITION") if tech else None,
-                "PIVOT_BIAS":     tech["indicators"].get("PIVOT_BIAS") if tech else None,
             }
-
-            # ── Entry Signal ─────────────────────────────
-            if tech:
-                entry = compute_entry_signal(
-                    tech["components"],
-                    fo.get("oi_signal", "N/A"),
-                    composite
-                )
-                row["ENTRY_SIGNAL"]        = entry["entry_signal"]
-                row["ENTRY_SCORE"]         = entry["entry_score"]
-                row["ENTRY_CONFIRMATIONS"] = ", ".join(entry["entry_confirmations"])
-            else:
-                row["ENTRY_SIGNAL"]        = "NO SIGNAL"
-                row["ENTRY_SCORE"]         = 0
-                row["ENTRY_CONFIRMATIONS"] = ""
-
             results.append(row)
 
         except Exception as e:
@@ -1649,20 +1418,59 @@ def run_screener(trade_date: date = None) -> dict:
     logger.info(f"Output saved: {output_path}")
 
     # ── Step 6b: Update signal history & compute persistence ──
+    # History is persisted in Google Sheets (SIGNAL HISTORY tab) so it
+    # survives across GitHub Actions runs (local filesystem resets each run).
     history_path = os.path.join(os.path.dirname(output_path), "signal_history.csv")
 
     # Append today's signals to history
     today_signals = df_results[["SYMBOL", "COMPOSITE_SCORE", "SIGNAL", "RS_PCT"]].copy()
     today_signals.insert(0, "DATE", trade_date.strftime("%Y-%m-%d"))
 
-    if os.path.exists(history_path):
-        history = pd.read_csv(history_path)
-        # Remove today if already present (re-run case)
-        history = history[history["DATE"] != trade_date.strftime("%Y-%m-%d")]
-        history = pd.concat([history, today_signals], ignore_index=True)
-    else:
-        history = today_signals.copy()
+    # Try to load history from Google Sheets first
+    history = None
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        creds_path = os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials/service_account.json")
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        if creds_json:
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+                tmp.write(creds_json)
+                creds_path = tmp.name
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sheet_id = os.environ.get("GOOGLE_SHEET_ID", GOOGLE_SHEET_ID)
+        sh = gc.open_by_key(sheet_id)
+        try:
+            ws = sh.worksheet("SIGNAL HISTORY")
+            records = ws.get_all_records()
+            if records:
+                history = pd.DataFrame(records)
+                logger.info(f"Loaded signal history from Sheets: {len(history)} rows across {history['DATE'].nunique()} days")
+        except gspread.WorksheetNotFound:
+            logger.info("SIGNAL HISTORY tab not found — will create on next sheets update")
+    except Exception as e:
+        logger.warning(f"Could not load signal history from Sheets: {e}")
 
+    # Fall back to local CSV if sheets load failed
+    if history is None:
+        if os.path.exists(history_path):
+            history = pd.read_csv(history_path)
+        else:
+            history = pd.DataFrame(columns=["DATE", "SYMBOL", "COMPOSITE_SCORE", "SIGNAL", "RS_PCT"])
+
+    # Remove today if already present (re-run case) and append
+    history = history[history["DATE"] != trade_date.strftime("%Y-%m-%d")]
+    history = pd.concat([history, today_signals], ignore_index=True)
+
+    # Keep only last 30 days to avoid sheet growing too large
+    history["DATE"] = pd.to_datetime(history["DATE"])
+    cutoff = pd.Timestamp(trade_date) - pd.Timedelta(days=30)
+    history = history[history["DATE"] >= cutoff]
+
+    # Save locally as backup
     history.to_csv(history_path, index=False)
     logger.info(f"Signal history updated: {len(history)} rows across {history['DATE'].nunique()} days")
 
@@ -1869,6 +1677,7 @@ def run_screener(trade_date: date = None) -> dict:
         "persistent_shorts": persistent_shorts,
         "persistence": persistence,
         "sector_rotations": sector_rotations,
+        "signal_history": history.fillna("").to_dict(orient="records"),
     }
 
 
@@ -1908,6 +1717,7 @@ if __name__ == "__main__":
                 "persistent_shorts": results["persistent_shorts"].fillna("").to_dict(orient="records"),
                 "sector_rotations": results.get("sector_rotations", []),
                 "full_universe": results["full_universe"].fillna("").to_dict(orient="records"),
+                "signal_history": results.get("signal_history", []),
             }
             json.dump(serializable, f, indent=2, default=str)
         logger.info(f"JSON results saved: {output_json}")
