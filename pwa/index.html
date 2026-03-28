@@ -487,34 +487,26 @@ function valChip(label, value) {
 function parseCSV(text) {
   const lines = text.trim().split("\n");
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.trim().replace(/"/g, ""));
-
-  function parseLine(line) {
-    const vals = [];
-    let cur = "", inQuote = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        inQuote = !inQuote;
-      } else if (ch === ',' && !inQuote) {
-        vals.push(cur.trim());
-        cur = "";
-      } else {
-        cur += ch;
-      }
-    }
-    vals.push(cur.trim());
-    return vals;
-  }
-
+  const headers = splitCSVLine(lines[0]);
   return lines.slice(1).map(line => {
-    const vals = parseLine(line);
+    const vals = splitCSVLine(line);
     const row = {};
-    headers.forEach((h, i) => {
-      row[h] = (vals[i] || "").trim();
-    });
+    headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
     return row;
   });
+}
+
+function splitCSVLine(line) {
+  const result = [];
+  let cur = "", inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQuote = !inQuote; }
+    else if (c === ',' && !inQuote) { result.push(cur.trim()); cur = ""; }
+    else { cur += c; }
+  }
+  result.push(cur.trim());
+  return result;
 }
 
 // ─── DATA FETCHING ───────────────────────────────────────────────
