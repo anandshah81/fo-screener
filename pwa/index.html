@@ -700,7 +700,14 @@ function renderStockCard(stock, type = "long", compact = false) {
   const ema   = stock.EMA_SIGNAL || "";
   const macd  = stock.MACD_SIGNAL || "";
   const st    = stock.SUPERTREND_SIGNAL || "";
-  const dlv   = parseFloat(stock.DELIVERY_PCT);
+  const dlv           = parseFloat(stock.DELIVERY_PCT);
+  const entrySignal   = stock.ENTRY_SIGNAL || "";
+  const confirmations = stock.ENTRY_CONFIRMATIONS || "";
+  const pivot         = stock.PIVOT || null;
+  const pivotR1       = stock.PIVOT_R1 || null;
+  const pivotS1       = stock.PIVOT_S1 || null;
+  const nrSignal      = stock.NR_SIGNAL || "";
+  const candle        = stock.CANDLE_PATTERN || "";
 
   const barW = scoreBarWidth(cs);
   const barCls = cs >= 0 ? "positive" : "negative";
