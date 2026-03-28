@@ -342,6 +342,8 @@
   <button class="tab-btn" data-tab="longs">🟢 Longs</button>
   <button class="tab-btn" data-tab="shorts">🔴 Shorts</button>
   <button class="tab-btn" data-tab="alerts">⚠️ Alerts</button>
+  <button class="tab-btn" data-tab="sectors">🗂 Sectors</button>
+  <button class="tab-btn" data-tab="persistent">🔁 Persistent</button>
   <button class="tab-btn" data-tab="universe">🌐 Universe</button>
 </nav>
 
@@ -393,6 +395,19 @@
 <!-- ALERTS TAB -->
 <div id="tab-alerts" class="tab-content">
   <div id="alerts-list"></div>
+</div>
+
+<!-- SECTORS TAB -->
+<div id="tab-sectors" class="tab-content">
+  <div id="sectors-container"></div>
+</div>
+
+<!-- PERSISTENT TAB -->
+<div id="tab-persistent" class="tab-content">
+  <div class="section-title">🟢 Persistent Longs <span></span></div>
+  <div id="persistent-longs-container"></div>
+  <div class="section-title" style="margin-top:16px">🔴 Persistent Shorts <span></span></div>
+  <div id="persistent-shorts-container"></div>
 </div>
 
 <!-- UNIVERSE TAB -->
@@ -548,6 +563,8 @@ function normalizeRow(row) {
     PIVOT_R1:         row["R1"]                 || null,
     PIVOT_S1:         row["S1"]                 || null,
     PIVOT_POSITION:   row["Pivot Position"]     || "",
+    DIRECTION:        row["Direction"]           || "",
+    PERSISTENCE:      row["Streak (days)"]       || 0,
   };
 }
 
@@ -557,20 +574,20 @@ async function fetchSheetData() {
   }
 
   try {
-    const [longsResp, shortsResp, alertsResp, universeResp] = await Promise.all([
+    const [longsResp, shortsResp, alertsResp, universeResp, briefResp, sectorResp, persistResp] = await Promise.all([
       fetch(sheetCsvUrl(TAB_GIDS.top_longs)),
       fetch(sheetCsvUrl(TAB_GIDS.top_shorts)),
       fetch(sheetCsvUrl(TAB_GIDS.oi_alerts)),
       fetch(sheetCsvUrl(TAB_GIDS.full_universe)),
+      fetch(sheetCsvUrl(TAB_GIDS.morning_brief)),
+      fetch(sheetCsvUrl(TAB_GIDS.sector_summary)),
+      fetch(sheetCsvUrl(TAB_GIDS.persistent_signals)),
     ]);
 
-    const [longsText, shortsText, alertsText, universeText] = await Promise.all([
+    const [longsText, shortsText, alertsText, universeText, briefText, sectorText, persistText] = await Promise.all([
       longsResp.text(), shortsResp.text(), alertsResp.text(), universeResp.text(),
+      briefResp.text(), sectorResp.text(), persistResp.text(),
     ]);
-
-    // Fetch brief for macro
-    const briefResp = await fetch(sheetCsvUrl(TAB_GIDS.morning_brief));
-    const briefText = await briefResp.text();
 
     // Parse macro from brief
     const briefLines = briefText.split("\n");
@@ -580,14 +597,38 @@ async function fetchSheetData() {
       if (line.includes("FII Index Futures:")) { const m = line.match(/([\d,]+)/); if (m) fii_index_fut_net = line.includes("SHORT") ? -parseInt(m[1].replace(/,/g,"")) : parseInt(m[1].replace(/,/g,"")); }
       if (line.includes("Date:")) { const m = line.match(/Date:,([^,]+)/); if (m) trade_date = m[1].trim(); }
     });
+    // Parse sector summary (skip title row)
+    const sectorLines = sectorText.trim().split("\n");
+    const sector_summary = parseCSV(sectorLines.slice(1).join("\n"))
+      .map(r => ({
+        SECTOR:   r["Sector"]    || "",
+        AVG_SCORE:r["Avg Score"] || 0,
+        LONGS:    r["Longs"]     || 0,
+        SHORTS:   r["Shorts"]    || 0,
+        NEUTRAL:  r["Neutral"]   || 0,
+        TOTAL:    r["Total"]     || 0,
+        BIAS:     r["Bias"]      || "NEUTRAL",
+        ROTATION: r["Rotation"]  || "",
+      })).filter(r => r.SECTOR && r.SECTOR !== "Sector");
+
+    // Parse persistent signals (skip title row)
+    const persistLines = persistText.trim().split("\n");
+    const persistData = parseCSV(persistLines.slice(1).join("\n"))
+      .map(normalizeRow).filter(r => r.SYMBOL && r.DIRECTION);
+    const persistent_longs  = persistData.filter(r => r.DIRECTION.toUpperCase() === "LONG");
+    const persistent_shorts = persistData.filter(r => r.DIRECTION.toUpperCase() === "SHORT");
+
     return {
       brief: briefText,
       macro: { market_bias, fii_index_fut_net },
       trade_date,
-      top_longs:    parseCSV(longsText).map(normalizeRow),
-      top_shorts:   parseCSV(shortsText).map(normalizeRow),
-      oi_alerts:    parseCSV(alertsText).map(normalizeRow),
-      full_universe: parseCSV(universeText).map(normalizeRow),
+      top_longs:         parseCSV(longsText).map(normalizeRow),
+      top_shorts:        parseCSV(shortsText).map(normalizeRow),
+      oi_alerts:         parseCSV(alertsText).map(normalizeRow),
+      full_universe:     parseCSV(universeText).map(normalizeRow),
+      sector_summary,
+      persistent_longs,
+      persistent_shorts,
       last_updated: new Date().toLocaleTimeString("en-IN"),
     };
   } catch (err) {
@@ -836,6 +877,53 @@ function renderUniverseRow(stock, rank) {
   `;
 }
 
+function renderSectors(sectors) {
+  const biasClr = {"BULLISH":"#22c55e","MILD BULLISH":"#86efac","NEUTRAL":"#94a3b8","MILD BEARISH":"#fb923c","BEARISH":"#ef4444"};
+  document.getElementById("sectors-container").innerHTML = sectors.length === 0
+    ? "<p style='color:var(--text-dim);padding:16px'>No sector data available</p>"
+    : `<table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="color:var(--text-dim);text-align:left;border-bottom:1px solid var(--border)">
+          <th style="padding:10px 6px">Sector</th>
+          <th style="padding:10px 6px;text-align:center">Avg</th>
+          <th style="padding:10px 6px;text-align:center">L</th>
+          <th style="padding:10px 6px;text-align:center">S</th>
+          <th style="padding:10px 6px;text-align:center">N</th>
+          <th style="padding:10px 6px">Bias</th>
+        </tr></thead>
+        <tbody>
+          ${sectors.map(s => {
+            const avg = parseFloat(s.AVG_SCORE||0);
+            const clr = biasClr[s.BIAS]||"#94a3b8";
+            return `<tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:10px 6px;font-weight:600">${s.SECTOR}</td>
+              <td style="padding:10px 6px;text-align:center;color:${avg>=0?'#22c55e':'#ef4444'}">${avg>=0?'+':''}${avg}</td>
+              <td style="padding:10px 6px;text-align:center;color:#22c55e;font-weight:600">${s.LONGS}</td>
+              <td style="padding:10px 6px;text-align:center;color:#ef4444;font-weight:600">${s.SHORTS}</td>
+              <td style="padding:10px 6px;text-align:center;color:var(--text-dim)">${s.NEUTRAL}</td>
+              <td style="padding:10px 6px;color:${clr};font-weight:600">${s.BIAS}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>`;
+}
+
+function renderPersistent(longs, shorts) {
+  const fmt = (stocks, type) => {
+    if (!stocks.length) return `<p style='color:var(--text-dim);font-size:13px;padding:8px 0'>No persistent ${type}s yet — need 3+ days of history</p>`;
+    const clr = type==="long" ? "var(--green)" : "var(--red)";
+    return stocks.map(s => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--bg-card);border-radius:8px;margin-bottom:6px;border-left:3px solid ${clr}">
+        <div style="font-weight:800;font-size:15px;min-width:90px">${s.SYMBOL||""}</div>
+        <div style="font-size:11px;color:${clr};font-weight:700">P${s.PERSISTENCE||0}d</div>
+        <div style="font-size:13px;font-weight:700;color:${parseInt(s.COMPOSITE_SCORE||0)>=0?'var(--green)':'var(--red)'}">${parseInt(s.COMPOSITE_SCORE||0)>0?'+':''}${s.COMPOSITE_SCORE||0}</div>
+        <div style="font-size:11px;color:var(--text-dim)">${s.OI_SIGNAL||""}</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-left:auto">${s.RS_SIGNAL||""}</div>
+      </div>`).join("");
+  };
+  document.getElementById("persistent-longs-container").innerHTML = fmt(longs, "long");
+  document.getElementById("persistent-shorts-container").innerHTML = fmt(shorts, "short");
+}
+
 // ─── RENDER ALL TABS ────────────────────────────────────────────
 
 function renderAll(data) {
@@ -893,6 +981,12 @@ function renderAll(data) {
   document.getElementById("alerts-list").innerHTML =
     `<div class="section-title">⚠️ OI Alerts (${allAlerts.length}) <span></span></div>` +
     (allAlerts.map(s => renderAlertCard(s)).join("") || "<p style='color:var(--text-dim)'>No OI alerts today</p>");
+
+  // SECTORS
+  renderSectors(data.sector_summary || []);
+
+  // PERSISTENT
+  renderPersistent(data.persistent_longs || [], data.persistent_shorts || []);
 
   // UNIVERSE
   renderUniverse();
