@@ -120,7 +120,7 @@ VOLUME_LOW_RATIO  = 0.5   # <0.5x avg → weak
 OI_CHANGE_MEDIUM = 15     # % change for +1/-1 extra
 OI_CHANGE_HIGH   = 25     # % change for +2/-2 extra
 OI_CHANGE_EXTREME = 40    # % change — exceptional surge, new EXTREME severity tier
-OI_ALERT_THRESHOLD = 10   # % change for OI alert list
+OI_ALERT_THRESHOLD = 15   # % change for OI alert list
 
 # PCR (Put-Call Ratio) per stock — derived from options bhavcopy (STO rows)
 PCR_VERY_BULLISH  = 0.5   # PCR < 0.5  → call-heavy → +2
